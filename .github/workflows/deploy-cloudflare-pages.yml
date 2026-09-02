@@ -1,4 +1,5 @@
 name: Deploy Meeting Notes to Cloudflare Pages
+# Cloudflare credentials configured
 
 on:
   push:
