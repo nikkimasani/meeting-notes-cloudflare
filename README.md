@@ -1,17 +1,11 @@
-# Meeting Notes PWA
+# Meeting Notes Cloudflare PWA
 
-A privacy-first meeting recorder, live transcript, summary, and action-item workspace. Data stays in the current browser using local storage.
+Cloudflare Pages deployment of the Meeting Notes workspace.
 
-## Run
+This repository mirrors the enhanced Meeting Notes interface with mobile recording safeguards, speaker-aware transcripts, summaries, action items, meeting organization, analytics, backups, archive recovery, follow-up drafts, and rich exports.
 
-```bash
-npm install
-npm run dev
-```
+## Deployment
 
-## Deploy
+GitHub Actions builds with `npm run build` and publishes `dist` to the `meeting-notes-cloudflare` Pages project.
 
-- Vercel: import the repository and use `npm run build`, output `dist`.
-- Cloudflare Pages: connect the repository and use `npm run build`, output `dist`.
-
-Microphone access requires HTTPS. Live transcription depends on browser Speech Recognition support. Chrome and Edge provide the broadest support. Imported recordings can be played back while the transcript is added manually.
+Cloudflare Pages Functions proxy `/api/*` requests to the secured Vercel server functions. The OpenAI key remains server-side and is never included in the browser bundle.
