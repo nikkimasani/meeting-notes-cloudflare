@@ -6,45 +6,12 @@
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#081421",
-  "theme_color": "#0c1b2a",
-  "categories": [
-    "productivity",
-    "business",
-    "utilities"
-  ],
+  "background_color": "#20262d",
+  "theme_color": "#20262d",
+  "categories": ["productivity", "business", "utilities"],
   "shortcuts": [
-    {
-      "name": "New meeting",
-      "short_name": "New",
-      "url": "/?action=new",
-      "icons": [
-        {
-          "src": "/icon.svg",
-          "sizes": "any",
-          "type": "image/svg+xml"
-        }
-      ]
-    },
-    {
-      "name": "Search meetings",
-      "short_name": "Search",
-      "url": "/?focus=search",
-      "icons": [
-        {
-          "src": "/icon.svg",
-          "sizes": "any",
-          "type": "image/svg+xml"
-        }
-      ]
-    }
+    {"name":"New meeting","short_name":"New","url":"/?action=new","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml"}]},
+    {"name":"Search meetings","short_name":"Search","url":"/?focus=search","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml"}]}
   ],
-  "icons": [
-    {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    }
-  ]
+  "icons": [{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
 }
