@@ -1371,13 +1371,15 @@ function App() {
               : "webm";
         form.append("audio", part, `meeting-${index + 1}.${extension}`);
         form.append("language", m.language || language);
-      const response = await fetch(
-        "https://meeting-notes-eta-ecru.vercel.app/api/transcribe",
-        {
-        method: "POST",
-        body: form,
-        },
-      ),
+        const clientRequestId = crypto.randomUUID();
+        const response = await fetch(
+          "https://meeting-notes-eta-ecru.vercel.app/api/transcribe",
+          {
+            method: "POST",
+            headers: { "x-client-request-id": clientRequestId },
+            body: form,
+          },
+        ),
           raw = await response.text();
         let data: any;
         try {
@@ -1395,7 +1397,7 @@ function App() {
         }
         if (!response.ok)
           throw new Error(
-            data.error || `Transcription failed (${response.status}).`,
+            `${data.error || `Transcription failed (${response.status}).`} Reference: ${data.requestId || clientRequestId}`,
           );
         const partSegments: TranscriptSegment[] = Array.isArray(data.segments)
           ? data.segments
