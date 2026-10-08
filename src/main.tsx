@@ -356,7 +356,7 @@ function MobileHome({
           <button aria-label="Schedule a meeting" onClick={onSchedule}>
             <Plus />
           </button>
-          <button aria-label="Notifications">
+          <button aria-label="View action items" title="View action items" onClick={() => onTab("actions")}>
             <Bell />
           </button>
         </div>
