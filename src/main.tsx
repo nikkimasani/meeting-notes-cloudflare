@@ -900,6 +900,8 @@ function App() {
   const [calendarStatus, setCalendarStatus] = useState("");
   const [calendarBusy, setCalendarBusy] = useState(false);
   const calendarCallbackHandled = useRef(false);
+  const calendarMeetingsRef = useRef(meetings);
+  calendarMeetingsRef.current = meetings;
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
   const [consent, setConsent] = useState(false);
@@ -1211,7 +1213,7 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
   async function syncCalendars() {
     try {
       setCalendarBusy(true); setCalendarStatus("Syncing planned meetings…");
-      const planned = meetings.filter(m => m.status === "planned" && !m.archived).map(m => ({ id:m.id,title:m.title,date:m.date,duration:m.duration,status:m.status,meetingType:m.meetingType,attendees:m.attendees,agenda:m.agenda,notes:m.notes,updatedAt:m.updatedAt || new Date().toISOString() }));
+      const planned = calendarMeetingsRef.current.filter(m => m.status === "planned" && !m.archived).map(m => ({ id:m.id,title:m.title,date:m.date,duration:m.duration,status:m.status,meetingType:m.meetingType,attendees:m.attendees,agenda:m.agenda,notes:m.notes,updatedAt:m.updatedAt || new Date().toISOString() }));
       const data = await calendarRequest("sync", { meetings: planned });
       if (Array.isArray(data.meetings) && data.meetings.length) setMeetings(items => items.map(item => { const changed = data.meetings.find((m: Meeting) => m.id === item.id); return changed ? { ...item, ...changed, updatedAt: new Date().toISOString() } : item; }));
       const totals = (data.results || []).map((r: any) => r.error ? (r.provider + ": " + r.error) : (r.provider + ": " + (r.created || 0) + " created, " + (r.updatedCalendar || 0) + " sent, " + (r.updatedFromCalendar || 0) + " received"));
@@ -1232,6 +1234,27 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
     try { provider = JSON.parse(decodeURIComponent(escape(atob(state.split(".")[0].replace(/-/g,"+").replace(/_/g,"/"))))).provider; } catch {}
     void (async () => { try { setCalendarBusy(true); await calendarRequest("complete", { code, state }); await loadCalendarConnections(); setCalendarStatus((provider === "google" ? "Google Calendar" : "Outlook") + " connected. Sync to add your planned meetings."); } catch (e) { setCalendarStatus(e instanceof Error ? e.message : "Calendar connection failed."); } finally { setCalendarBusy(false); } })();
   }, [session]);
+  useEffect(() => {
+    if (!session || !Object.keys(calendarConnections).length) return;
+    const run = () => void syncCalendars();
+    const initial = window.setTimeout(run, 1500);
+    const interval = window.setInterval(run, 300000);
+    let focusTimer: number | undefined;
+    const resync = () => {
+      if (document.visibilityState !== "visible") return;
+      window.clearTimeout(focusTimer);
+      focusTimer = window.setTimeout(run, 700);
+    };
+    window.addEventListener("focus", resync);
+    document.addEventListener("visibilitychange", resync);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("focus", resync);
+      document.removeEventListener("visibilitychange", resync);
+    };
+  }, [session, calendarConnections]);
   function newMeeting() {
     const m: Meeting = {
       id: crypto.randomUUID(),
