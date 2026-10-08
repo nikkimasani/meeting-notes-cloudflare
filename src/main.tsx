@@ -757,6 +757,7 @@ function SettingsPanel({
       <p className="inline-status">Only meetings in your Said and Done agenda are linked. Unrelated calendar events stay out of your library; deletions are reported without removing events.</p>
       <div className="settings-actions">{(["google","microsoft"] as const).map(provider=><button key={provider} className={calendarConnections[provider]?"secondary-action":"primary-action"} disabled={!session||calendarBusy} onClick={()=>calendarConnections[provider]?onDisconnectCalendar(provider):onConnectCalendar(provider)}>{calendarConnections[provider]?("Disconnect "+(provider==="google"?"Google Calendar":"Outlook")+" ("+calendarConnections[provider]+")"):("Connect "+(provider==="google"?"Google Calendar":"Outlook"))}</button>)}<button className="secondary-action" disabled={!session||calendarBusy||!Object.keys(calendarConnections).length} onClick={onSyncCalendars}>{calendarBusy?"Syncing…":"Sync both calendars"}</button></div>
       {calendarStatus&&<p className="inline-status" role="status">{calendarStatus}</p>}
+      {calendarHistory.length>0&&<div className="calendar-history"><b>Recent syncs</b>{calendarHistory.slice(0,5).map((run,i)=><p key={i} className="inline-status">{new Date(run.at).toLocaleString()} · {(run.results||[]).map((r:any)=>r.provider+(r.error?": "+r.error:"")).join(" · ")}</p>)}</div>}
     </section>
 <section className="settings-section">
             <div className="settings-section-heading">
@@ -899,6 +900,9 @@ function App() {
   const [calendarConnections, setCalendarConnections] = useState<Record<string,string>>({});
   const [calendarStatus, setCalendarStatus] = useState("");
   const [calendarBusy, setCalendarBusy] = useState(false);
+  const [calendarHistory, setCalendarHistory] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem("said-done-calendar-history") || "[]"); } catch { return []; } });
+  const calendarHistoryRef = useRef(calendarHistory);
+  calendarHistoryRef.current = calendarHistory;
   const calendarCallbackHandled = useRef(false);
   const calendarMeetingsRef = useRef(meetings);
   calendarMeetingsRef.current = meetings;
@@ -1215,6 +1219,10 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
       setCalendarBusy(true); setCalendarStatus("Syncing planned meetings…");
       const planned = calendarMeetingsRef.current.filter(m => m.status === "planned" && !m.archived).map(m => ({ id:m.id,title:m.title,date:m.date,duration:m.duration,status:m.status,meetingType:m.meetingType,attendees:m.attendees,agenda:m.agenda,notes:m.notes,updatedAt:m.updatedAt || new Date().toISOString() }));
       const data = await calendarRequest("sync", { meetings: planned });
+      const history = [{ at: new Date().toISOString(), results: data.results || [] }, ...calendarHistoryRef.current].slice(0, 8);
+      calendarHistoryRef.current = history;
+      setCalendarHistory(history);
+      localStorage.setItem("said-done-calendar-history", JSON.stringify(history));
       if (Array.isArray(data.meetings) && data.meetings.length) setMeetings(items => items.map(item => { const changed = data.meetings.find((m: Meeting) => m.id === item.id); return changed ? { ...item, ...changed, updatedAt: new Date().toISOString() } : item; }));
       const totals = (data.results || []).map((r: any) => r.error ? (r.provider + ": " + r.error) : (r.provider + ": " + (r.created || 0) + " created, " + (r.updatedCalendar || 0) + " sent, " + (r.updatedFromCalendar || 0) + " received" + (r.conflicts?.length ? " · Attention: " + r.conflicts.map((c: any) => c.message).join(" / ") : "")));
       setCalendarStatus(totals.length ? totals.join(" · ") : "Connect Google Calendar or Outlook to begin syncing.");
