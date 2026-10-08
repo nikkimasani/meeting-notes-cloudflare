@@ -973,12 +973,13 @@ function App() {
   const chunkSequence = useRef(0);
   const chunkWrites = useRef<Promise<void>>(Promise.resolve());
   const audioLoading = useRef(new Set<string>());
+function showReminderFallback(title:string,body:string,key:string,meetingId:string){const notification=new Notification(title,{body,tag:key,data:{meetingId}});notification.onclick=()=>{window.focus();window.location.assign('/?openMeeting='+encodeURIComponent(meetingId))}}
 function sendReminder(key:string,title:string,body:string,meetingId:string){
   let sent:string[]=[];try{sent=JSON.parse(localStorage.getItem('said-done-reminders-sent')||'[]')}catch{}
   if(sent.includes(key))return;
   sent.push(key);localStorage.setItem('said-done-reminders-sent',JSON.stringify(sent.slice(-300)));
   if(typeof Notification==='undefined'||Notification.permission!=='granted')return;
-  if('serviceWorker'in navigator){void navigator.serviceWorker.ready.then(reg=>reg.showNotification(title,{body,tag:key,icon:'/saiddone-icon-192.png',data:{meetingId}})).catch(()=>{if(Notification.permission==='granted')new Notification(title,{body,tag:key,data:{meetingId}})})}
+  if('serviceWorker'in navigator){void navigator.serviceWorker.ready.then(reg=>reg.showNotification(title,{body,tag:key,icon:'/saiddone-icon-192.png',data:{meetingId}})).catch(()=>{if(Notification.permission==='granted')showReminderFallback(title,body,key,meetingId)})}
   else new Notification(title,{body,tag:key});
 }
 function enableReminders(){if(typeof Notification==='undefined'){setNotificationPermission('unsupported');return}void Notification.requestPermission().then(permission=>{setNotificationPermission(permission);if(permission==='granted'){localStorage.setItem('said-done-reminders','true');setRemindersEnabled(true)}})}
