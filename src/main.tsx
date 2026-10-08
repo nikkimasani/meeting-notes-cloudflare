@@ -973,12 +973,12 @@ function App() {
   const chunkSequence = useRef(0);
   const chunkWrites = useRef<Promise<void>>(Promise.resolve());
   const audioLoading = useRef(new Set<string>());
-function sendReminder(key:string,title:string,body:string){
+function sendReminder(key:string,title:string,body:string,meetingId:string){
   let sent:string[]=[];try{sent=JSON.parse(localStorage.getItem('said-done-reminders-sent')||'[]')}catch{}
   if(sent.includes(key))return;
   sent.push(key);localStorage.setItem('said-done-reminders-sent',JSON.stringify(sent.slice(-300)));
   if(typeof Notification==='undefined'||Notification.permission!=='granted')return;
-  if('serviceWorker'in navigator){void navigator.serviceWorker.ready.then(reg=>reg.showNotification(title,{body,tag:key,icon:'/saiddone-icon-192.png'})).catch(()=>{if(Notification.permission==='granted')new Notification(title,{body,tag:key})})}
+  if('serviceWorker'in navigator){void navigator.serviceWorker.ready.then(reg=>reg.showNotification(title,{body,tag:key,icon:'/saiddone-icon-192.png',data:{meetingId}})).catch(()=>{if(Notification.permission==='granted')new Notification(title,{body,tag:key,data:{meetingId}})})}
   else new Notification(title,{body,tag:key});
 }
 function enableReminders(){if(typeof Notification==='undefined'){setNotificationPermission('unsupported');return}void Notification.requestPermission().then(permission=>{setNotificationPermission(permission);if(permission==='granted'){localStorage.setItem('said-done-reminders','true');setRemindersEnabled(true)}})}
@@ -987,8 +987,19 @@ function saveReminderPreference(enabled:boolean){localStorage.setItem('said-done
   function saveTaskReminderTime(time:string){localStorage.setItem('said-done-task-reminder-time',time);setTaskReminderTime(time)}
 useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')return;
     const check=()=>{const now=Date.now();
-      for (const meeting of meetings){if(meeting.status==='planned'){const start=new Date(meeting.date).getTime();if(Number.isFinite(start)&&start>now&&start-meetingReminderMinutes*60*1000<=now)sendReminder('meeting:'+meeting.id+':'+meeting.date,'Meeting soon',meeting.title+' starts at '+new Date(meeting.date).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}))}for(let i=0;i<meeting.actions.length;i++){if(meeting.completed?.[i])continue;const due=meeting.actionDetails?.[i]?.due;if(!due)continue;const dueAt=new Date(due+'T'+taskReminderTime+':00').getTime();if(Number.isFinite(dueAt)&&dueAt<=now)sendReminder('action:'+meeting.id+':'+i+':'+due,'Action item due',meeting.actions[i]+' · '+meeting.title)}}};check();const interval=window.setInterval(check,60000);window.addEventListener('focus',check);return()=>{window.clearInterval(interval);window.removeEventListener('focus',check)}},[meetings,remindersEnabled,notificationPermission,meetingReminderMinutes,taskReminderTime]);
+      for (const meeting of meetings){if(meeting.status==='planned'){const start=new Date(meeting.date).getTime();if(Number.isFinite(start)&&start>now&&start-meetingReminderMinutes*60*1000<=now)sendReminder('meeting:'+meeting.id+':'+meeting.date,'Meeting soon',meeting.title+' starts at '+new Date(meeting.date).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}),meeting.id)}for(let i=0;i<meeting.actions.length;i++){if(meeting.completed?.[i])continue;const due=meeting.actionDetails?.[i]?.due;if(!due)continue;const dueAt=new Date(due+'T'+taskReminderTime+':00').getTime();if(Number.isFinite(dueAt)&&dueAt<=now)sendReminder('action:'+meeting.id+':'+i+':'+due,'Action item due',meeting.actions[i]+' · '+meeting.title,meeting.id)}}};check();const interval=window.setInterval(check,60000);window.addEventListener('focus',check);return()=>{window.clearInterval(interval);window.removeEventListener('focus',check)}},[meetings,remindersEnabled,notificationPermission,meetingReminderMinutes,taskReminderTime]);
     useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("openMeeting");
+    if (!id) return;
+    const meeting = meetings.find((item) => item.id === id);
+    if (!meeting) return;
+    setSelected(meeting.id);
+    setShowDashboard(false);
+    setMobileView("detail");
+    window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+  }, [meetings]);
+  useEffect(() => {
     localStorage.setItem(storeKey, JSON.stringify(meetings));
   }, [meetings]);
   useEffect(() => {
