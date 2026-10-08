@@ -333,6 +333,8 @@ function MobileHome({
         meeting,
         task,
         index,
+        detail: meeting.actionDetails?.[index],
+        overdue: !!meeting.actionDetails?.[index]?.due && new Date(meeting.actionDetails[index].due + "T23:59:59") < new Date(),
         done: !!meeting.completed?.[index],
       })),
     )
@@ -494,7 +496,7 @@ function MobileHome({
                 <small>{actions.length} remaining</small>
               </div>
               <section className="action-list">
-                {actions.map(({ meeting, task, index }) => (
+                {actions.map(({ meeting, task, index, detail, overdue }) => (
                   <button
                     key={meeting.id + index}
                     onClick={() => onOpenMeeting(meeting.id)}
@@ -502,7 +504,9 @@ function MobileHome({
                     <span className="action-check" />
                     <span>
                       <b>{task}</b>
-                      <small>{meeting.title}</small>
+                      <small>{meeting.title}{detail?.owner ? " · Owner: " + detail.owner : ""}</small>
+                      {detail?.due && <small>Due {new Date(detail.due + "T00:00:00").toLocaleDateString()}{overdue ? " · OVERDUE" : ""}</small>}
+                      <small>Priority: {detail?.priority || "medium"}</small>
                     </span>
                   </button>
                 ))}
