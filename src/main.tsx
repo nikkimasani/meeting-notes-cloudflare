@@ -577,6 +577,10 @@ type SettingsPanelProps = {
   notificationPermission: NotificationPermission | "unsupported";
   onRemindersEnabled: (enabled: boolean) => void;
   onEnableReminders: () => void;
+  meetingReminderMinutes: number;
+  taskReminderTime: string;
+  onMeetingReminderMinutes: (minutes: number) => void;
+  onTaskReminderTime: (time: string) => void;
   calendarConnections: Record<string, string>;
   calendarStatus: string;
   calendarBusy: boolean;
@@ -600,6 +604,10 @@ function SettingsPanel({
   notificationPermission,
   onRemindersEnabled,
   onEnableReminders,
+  meetingReminderMinutes,
+  taskReminderTime,
+  onMeetingReminderMinutes,
+  onTaskReminderTime,
   calendarConnections,
   calendarStatus,
   calendarBusy,
@@ -817,7 +825,17 @@ function SettingsPanel({
                 }
               />
             </label>
-          </section>
+                      <label className="setting-row">
+              <span><b>Meeting reminder lead time</b><small>Choose how early a meeting alert arrives.</small></span>
+              <select aria-label="Meeting reminder lead time" value={meetingReminderMinutes} onChange={(e) => onMeetingReminderMinutes(Number(e.target.value))}>
+                <option value={5}>5 minutes</option><option value={10}>10 minutes</option><option value={15}>15 minutes</option><option value={30}>30 minutes</option><option value={60}>1 hour</option>
+              </select>
+            </label>
+            <label className="setting-row">
+              <span><b>Daily task reminder time</b><small>Local time on the task due date.</small></span>
+              <input aria-label="Daily task reminder time" type="time" value={taskReminderTime} onChange={(e) => onTaskReminderTime(e.target.value)} />
+            </label>
+</section>
           <section className="settings-section">
             <div className="settings-section-heading">
               <Database />
@@ -938,6 +956,12 @@ function App() {
   const [remindersEnabled, setRemindersEnabled] = useState(
     () => localStorage.getItem("said-done-reminders") === "true",
   );
+  const [meetingReminderMinutes, setMeetingReminderMinutes] = useState(
+    () => Number(localStorage.getItem("said-done-meeting-reminder-minutes")) || 15,
+  );
+  const [taskReminderTime, setTaskReminderTime] = useState(
+    () => localStorage.getItem("said-done-task-reminder-time") || "09:00",
+  );
   const [notificationPermission, setNotificationPermission] = useState<
     NotificationPermission | "unsupported"
   >(() => (typeof Notification === "undefined" ? "unsupported" : Notification.permission));
@@ -959,9 +983,11 @@ function sendReminder(key:string,title:string,body:string){
 }
 function enableReminders(){if(typeof Notification==='undefined'){setNotificationPermission('unsupported');return}void Notification.requestPermission().then(permission=>{setNotificationPermission(permission);if(permission==='granted'){localStorage.setItem('said-done-reminders','true');setRemindersEnabled(true)}})}
 function saveReminderPreference(enabled:boolean){localStorage.setItem('said-done-reminders',String(enabled));setRemindersEnabled(enabled)}
+  function saveMeetingReminderMinutes(minutes:number){localStorage.setItem('said-done-meeting-reminder-minutes',String(minutes));setMeetingReminderMinutes(minutes)}
+  function saveTaskReminderTime(time:string){localStorage.setItem('said-done-task-reminder-time',time);setTaskReminderTime(time)}
 useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')return;
     const check=()=>{const now=Date.now();
-      for (const meeting of meetings){if(meeting.status==='planned'){const start=new Date(meeting.date).getTime();if(Number.isFinite(start)&&start>now&&start-15*60*1000<=now)sendReminder('meeting:'+meeting.id+':'+meeting.date,'Meeting soon',meeting.title+' starts at '+new Date(meeting.date).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}))}for(let i=0;i<meeting.actions.length;i++){if(meeting.completed?.[i])continue;const due=meeting.actionDetails?.[i]?.due;if(!due)continue;const dueAt=new Date(due+'T09:00:00').getTime();if(Number.isFinite(dueAt)&&dueAt<=now)sendReminder('action:'+meeting.id+':'+i+':'+due,'Action item due',meeting.actions[i]+' · '+meeting.title)}}};check();const interval=window.setInterval(check,60000);window.addEventListener('focus',check);return()=>{window.clearInterval(interval);window.removeEventListener('focus',check)}},[meetings,remindersEnabled,notificationPermission]);
+      for (const meeting of meetings){if(meeting.status==='planned'){const start=new Date(meeting.date).getTime();if(Number.isFinite(start)&&start>now&&start-meetingReminderMinutes*60*1000<=now)sendReminder('meeting:'+meeting.id+':'+meeting.date,'Meeting soon',meeting.title+' starts at '+new Date(meeting.date).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}))}for(let i=0;i<meeting.actions.length;i++){if(meeting.completed?.[i])continue;const due=meeting.actionDetails?.[i]?.due;if(!due)continue;const dueAt=new Date(due+'T'+taskReminderTime+':00').getTime();if(Number.isFinite(dueAt)&&dueAt<=now)sendReminder('action:'+meeting.id+':'+i+':'+due,'Action item due',meeting.actions[i]+' · '+meeting.title)}}};check();const interval=window.setInterval(check,60000);window.addEventListener('focus',check);return()=>{window.clearInterval(interval);window.removeEventListener('focus',check)}},[meetings,remindersEnabled,notificationPermission,meetingReminderMinutes,taskReminderTime]);
     useEffect(() => {
     localStorage.setItem(storeKey, JSON.stringify(meetings));
   }, [meetings]);
@@ -3058,6 +3084,10 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
         notificationPermission={notificationPermission}
         onRemindersEnabled={saveReminderPreference}
         onEnableReminders={enableReminders}
+        meetingReminderMinutes={meetingReminderMinutes}
+        taskReminderTime={taskReminderTime}
+        onMeetingReminderMinutes={saveMeetingReminderMinutes}
+        onTaskReminderTime={saveTaskReminderTime}
         calendarConnections={calendarConnections}
         calendarStatus={calendarStatus}
         calendarBusy={calendarBusy}
