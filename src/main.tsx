@@ -66,6 +66,7 @@ type ActionItem = {
 };
 type Meeting = {
   id: string;
+  updatedAt?: string;
   title: string;
   date: string;
   duration: number;
@@ -576,6 +577,12 @@ type SettingsPanelProps = {
   notificationPermission: NotificationPermission | "unsupported";
   onRemindersEnabled: (enabled: boolean) => void;
   onEnableReminders: () => void;
+  calendarConnections: Record<string, string>;
+  calendarStatus: string;
+  calendarBusy: boolean;
+  onConnectCalendar: (provider: string) => void;
+  onDisconnectCalendar: (provider: string) => void;
+  onSyncCalendars: () => void;
 };
 function SettingsPanel({
   open,
@@ -593,6 +600,12 @@ function SettingsPanel({
   notificationPermission,
   onRemindersEnabled,
   onEnableReminders,
+  calendarConnections,
+  calendarStatus,
+  calendarBusy,
+  onConnectCalendar,
+  onDisconnectCalendar,
+  onSyncCalendars,
   onEmail,
   onPassword,
   onAuthMode,
@@ -739,7 +752,13 @@ function SettingsPanel({
               />
             </label>
           </section>
-          <section className="settings-section">
+              <section className="settings-section">
+      <div className="settings-section-heading"><CalendarDays/><div><h3>Calendar connections</h3><p>Sync planned meetings both ways with Google Calendar and Outlook.</p></div></div>
+      <p className="inline-status">Only meetings in your Said and Done agenda are linked. Unrelated calendar events stay out of your library; deletions are reported without removing events.</p>
+      <div className="settings-actions">{(["google","microsoft"] as const).map(provider=><button key={provider} className={calendarConnections[provider]?"secondary-action":"primary-action"} disabled={!session||calendarBusy} onClick={()=>calendarConnections[provider]?onDisconnectCalendar(provider):onConnectCalendar(provider)}>{calendarConnections[provider]?("Disconnect "+(provider==="google"?"Google Calendar":"Outlook")+" ("+calendarConnections[provider]+")"):("Connect "+(provider==="google"?"Google Calendar":"Outlook"))}</button>)}<button className="secondary-action" disabled={!session||calendarBusy||!Object.keys(calendarConnections).length} onClick={onSyncCalendars}>{calendarBusy?"Syncing…":"Sync both calendars"}</button></div>
+      {calendarStatus&&<p className="inline-status" role="status">{calendarStatus}</p>}
+    </section>
+<section className="settings-section">
             <div className="settings-section-heading">
               <Monitor />
               <div>
@@ -877,6 +896,10 @@ function App() {
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [cloudStatus, setCloudStatus] = useState("");
+  const [calendarConnections, setCalendarConnections] = useState<Record<string,string>>({});
+  const [calendarStatus, setCalendarStatus] = useState("");
+  const [calendarBusy, setCalendarBusy] = useState(false);
+  const calendarCallbackHandled = useRef(false);
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
   const [consent, setConsent] = useState(false);
@@ -1166,11 +1189,55 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
       done: actions.filter((x) => x.done).length,
     };
   }, [meetings]);
+  async function calendarRequest(action: string, extra: Record<string, unknown> = {}) {
+    if (!session) throw new Error("Sign in before connecting a calendar.");
+    const response = await fetch("/api/calendar", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + session.access_token }, body: JSON.stringify({ action, ...extra }) });
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || "Calendar request failed."); return data;
+  }
+  async function loadCalendarConnections() {
+    if (!session) return;
+    try { const data = await calendarRequest("status"); const connections: Record<string,string> = {}; for (const item of data.connections || []) connections[item.provider] = item.account_email || "Connected"; setCalendarConnections(connections); }
+    catch (e) { setCalendarStatus(e instanceof Error ? e.message : "Could not load calendar connections."); }
+  }
+  async function connectCalendar(provider: string) {
+    try { setCalendarBusy(true); setCalendarStatus("Opening provider sign-in…"); const data = await calendarRequest("start", { provider }); window.location.assign(data.authorizationUrl); }
+    catch (e) { setCalendarStatus(e instanceof Error ? e.message : "Could not start calendar connection."); setCalendarBusy(false); }
+  }
+  async function disconnectCalendar(provider: string) {
+    try { setCalendarBusy(true); await calendarRequest("disconnect", { provider }); await loadCalendarConnections(); setCalendarStatus("Calendar disconnected."); }
+    catch (e) { setCalendarStatus(e instanceof Error ? e.message : "Could not disconnect calendar."); }
+    finally { setCalendarBusy(false); }
+  }
+  async function syncCalendars() {
+    try {
+      setCalendarBusy(true); setCalendarStatus("Syncing planned meetings…");
+      const planned = meetings.filter(m => m.status === "planned" && !m.archived).map(m => ({ id:m.id,title:m.title,date:m.date,duration:m.duration,status:m.status,meetingType:m.meetingType,attendees:m.attendees,agenda:m.agenda,notes:m.notes,updatedAt:m.updatedAt || new Date().toISOString() }));
+      const data = await calendarRequest("sync", { meetings: planned });
+      if (Array.isArray(data.meetings) && data.meetings.length) setMeetings(items => items.map(item => { const changed = data.meetings.find((m: Meeting) => m.id === item.id); return changed ? { ...item, ...changed, updatedAt: new Date().toISOString() } : item; }));
+      const totals = (data.results || []).map((r: any) => r.error ? (r.provider + ": " + r.error) : (r.provider + ": " + (r.created || 0) + " created, " + (r.updatedCalendar || 0) + " sent, " + (r.updatedFromCalendar || 0) + " received"));
+      setCalendarStatus(totals.length ? totals.join(" · ") : "Connect Google Calendar or Outlook to begin syncing.");
+    } catch (e) { setCalendarStatus(e instanceof Error ? e.message : "Calendar sync failed."); }
+    finally { setCalendarBusy(false); }
+  }
+  useEffect(() => {
+    if (!session) return;
+    void loadCalendarConnections();
+    if (calendarCallbackHandled.current) return;
+    const params = new URLSearchParams(window.location.search), code = params.get("code"), state = params.get("state"), oauthError = params.get("error");
+    if (!code && !state && !oauthError) return;
+    calendarCallbackHandled.current = true; window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+    if (oauthError) { setCalendarStatus("Calendar authorization was cancelled or denied."); return; }
+    if (!code || !state) { setCalendarStatus("Calendar authorization response was incomplete."); return; }
+    let provider = "";
+    try { provider = JSON.parse(decodeURIComponent(escape(atob(state.split(".")[0].replace(/-/g,"+").replace(/_/g,"/"))))).provider; } catch {}
+    void (async () => { try { setCalendarBusy(true); await calendarRequest("complete", { code, state }); await loadCalendarConnections(); setCalendarStatus((provider === "google" ? "Google Calendar" : "Outlook") + " connected. Sync to add your planned meetings."); } catch (e) { setCalendarStatus(e instanceof Error ? e.message : "Calendar connection failed."); } finally { setCalendarBusy(false); } })();
+  }, [session]);
   function newMeeting() {
     const m: Meeting = {
       id: crypto.randomUUID(),
       title: "Untitled meeting",
       date: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       duration: 0,
       language,
       meetingType: "general",
@@ -1678,6 +1745,7 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
       if (!response.ok) throw new Error(rows.message || "Cloud load failed");
       const cloud: Meeting[] = rows.map((r: any) => ({
         id: r.id,
+        updatedAt: r.updated_at || r.created_at,
         title: r.title,
         date: r.started_at || r.created_at,
         duration: r.duration_seconds,
@@ -1747,6 +1815,7 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
         status: m.status || "complete",
         language: m.language === "auto" ? "en" : m.language || "en",
         started_at: m.date,
+        updated_at: m.updatedAt || new Date().toISOString(),
         duration_seconds: m.duration,
         audio_path: m.audioPath || null,
         transcript: m.transcript,
@@ -1805,7 +1874,7 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
   function update(p: Partial<Meeting>) {
     if (!current) return;
     setMeetings((v) =>
-      v.map((m) => (m.id === current.id ? { ...m, ...p } : m)),
+      v.map((m) => (m.id === current.id ? { ...m, ...p, updatedAt: new Date().toISOString() } : m)),
     );
   }
   async function regenerate() {
@@ -2958,6 +3027,12 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
         notificationPermission={notificationPermission}
         onRemindersEnabled={saveReminderPreference}
         onEnableReminders={enableReminders}
+        calendarConnections={calendarConnections}
+        calendarStatus={calendarStatus}
+        calendarBusy={calendarBusy}
+        onConnectCalendar={(provider) => void connectCalendar(provider)}
+        onDisconnectCalendar={(provider) => void disconnectCalendar(provider)}
+        onSyncCalendars={() => void syncCalendars()}
       />
       <footer
         style={{
