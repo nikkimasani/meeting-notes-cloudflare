@@ -1216,7 +1216,7 @@ useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')ret
       const planned = calendarMeetingsRef.current.filter(m => m.status === "planned" && !m.archived).map(m => ({ id:m.id,title:m.title,date:m.date,duration:m.duration,status:m.status,meetingType:m.meetingType,attendees:m.attendees,agenda:m.agenda,notes:m.notes,updatedAt:m.updatedAt || new Date().toISOString() }));
       const data = await calendarRequest("sync", { meetings: planned });
       if (Array.isArray(data.meetings) && data.meetings.length) setMeetings(items => items.map(item => { const changed = data.meetings.find((m: Meeting) => m.id === item.id); return changed ? { ...item, ...changed, updatedAt: new Date().toISOString() } : item; }));
-      const totals = (data.results || []).map((r: any) => r.error ? (r.provider + ": " + r.error) : (r.provider + ": " + (r.created || 0) + " created, " + (r.updatedCalendar || 0) + " sent, " + (r.updatedFromCalendar || 0) + " received"));
+      const totals = (data.results || []).map((r: any) => r.error ? (r.provider + ": " + r.error) : (r.provider + ": " + (r.created || 0) + " created, " + (r.updatedCalendar || 0) + " sent, " + (r.updatedFromCalendar || 0) + " received" + (r.conflicts?.length ? " · Attention: " + r.conflicts.map((c: any) => c.message).join(" / ") : "")));
       setCalendarStatus(totals.length ? totals.join(" · ") : "Connect Google Calendar or Outlook to begin syncing.");
     } catch (e) { setCalendarStatus(e instanceof Error ? e.message : "Calendar sync failed."); }
     finally { setCalendarBusy(false); }
