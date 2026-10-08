@@ -572,6 +572,10 @@ type SettingsPanelProps = {
   onInstall: () => void;
   onTheme: (theme: Theme) => void;
   onAutoSync: (enabled: boolean) => void;
+  remindersEnabled: boolean;
+  notificationPermission: NotificationPermission | "unsupported";
+  onRemindersEnabled: (enabled: boolean) => void;
+  onEnableReminders: () => void;
 };
 function SettingsPanel({
   open,
@@ -585,6 +589,10 @@ function SettingsPanel({
   installAvailable,
   theme,
   autoSync,
+  remindersEnabled,
+  notificationPermission,
+  onRemindersEnabled,
+  onEnableReminders,
   onEmail,
   onPassword,
   onAuthMode,
@@ -766,6 +774,32 @@ function SettingsPanel({
           </section>
           <section className="settings-section">
             <div className="settings-section-heading">
+              <Bell />
+              <div>
+                <h3>Task and meeting reminders</h3>
+                <p>Get local reminders for upcoming meetings and action items.</p>
+              </div>
+            </div>
+            <label className="setting-row">
+              <span>
+                <b>Browser notifications</b>
+                <small>{reminderMessage(notificationPermission)}</small>
+              </span>
+              <input
+                className="switch"
+                type="checkbox"
+                checked={remindersEnabled && notificationPermission === "granted"}
+                disabled={notificationPermission === "denied" || notificationPermission === "unsupported"}
+                onChange={(e) =>
+                  e.target.checked
+                    ? onEnableReminders()
+                    : onRemindersEnabled(false)
+                }
+              />
+            </label>
+          </section>
+          <section className="settings-section">
+            <div className="settings-section-heading">
               <Database />
               <div>
                 <h3>Data and storage</h3>
@@ -872,6 +906,12 @@ function App() {
   const [autoSync, setAutoSync] = useState(
     () => localStorage.getItem("meeting-notes-auto-sync") === "true",
   );
+  const [remindersEnabled, setRemindersEnabled] = useState(
+    () => localStorage.getItem("said-done-reminders") === "true",
+  );
+  const [notificationPermission, setNotificationPermission] = useState<
+    NotificationPermission | "unsupported"
+  >(() => (typeof Notification === "undefined" ? "unsupported" : Notification.permission));
   const media = useRef<MediaRecorder | null>(null);
   const recognition = useRef<any>(null);
   const wakeLock = useRef<any>(null);
@@ -880,7 +920,20 @@ function App() {
   const chunkSequence = useRef(0);
   const chunkWrites = useRef<Promise<void>>(Promise.resolve());
   const audioLoading = useRef(new Set<string>());
-  useEffect(() => {
+function sendReminder(key:string,title:string,body:string){
+  let sent:string[]=[];try{sent=JSON.parse(localStorage.getItem('said-done-reminders-sent')||'[]')}catch{}
+  if(sent.includes(key))return;
+  sent.push(key);localStorage.setItem('said-done-reminders-sent',JSON.stringify(sent.slice(-300)));
+  if(typeof Notification==='undefined'||Notification.permission!=='granted')return;
+  if('serviceWorker'in navigator){void navigator.serviceWorker.ready.then(reg=>reg.showNotification(title,{body,tag:key,icon:'/saiddone-icon-192.png'})).catch(()=>{if(Notification.permission==='granted')new Notification(title,{body,tag:key})})}
+  else new Notification(title,{body,tag:key});
+}
+function enableReminders(){if(typeof Notification==='undefined'){setNotificationPermission('unsupported');return}void Notification.requestPermission().then(permission=>{setNotificationPermission(permission);if(permission==='granted'){localStorage.setItem('said-done-reminders','true');setRemindersEnabled(true)}})}
+function saveReminderPreference(enabled:boolean){localStorage.setItem('said-done-reminders',String(enabled));setRemindersEnabled(enabled)}
+useEffect(() => {if (!remindersEnabled || notificationPermission!=='granted')return;
+    const check=()=>{const now=Date.now();
+      for (const meeting of meetings){if(meeting.status==='planned'){const start=new Date(meeting.date).getTime();if(Number.isFinite(start)&&start>now&&start-15*60*1000<=now)sendReminder('meeting:'+meeting.id+':'+meeting.date,'Meeting soon',meeting.title+' starts at '+new Date(meeting.date).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}))}for(let i=0;i<meeting.actions.length;i++){if(meeting.completed?.[i])continue;const due=meeting.actionDetails?.[i]?.due;if(!due)continue;const dueAt=new Date(due+'T09:00:00').getTime();if(Number.isFinite(dueAt)&&dueAt<=now)sendReminder('action:'+meeting.id+':'+i+':'+due,'Action item due',meeting.actions[i]+' · '+meeting.title)}}};check();const interval=window.setInterval(check,60000);window.addEventListener('focus',check);return()=>{window.clearInterval(interval);window.removeEventListener('focus',check)}},[meetings,remindersEnabled,notificationPermission]);
+    useEffect(() => {
     localStorage.setItem(storeKey, JSON.stringify(meetings));
   }, [meetings]);
   useEffect(() => {
@@ -2901,6 +2954,10 @@ function App() {
         onInstall={() => void installApp()}
         onTheme={setTheme}
         onAutoSync={setAutoSync}
+        remindersEnabled={remindersEnabled}
+        notificationPermission={notificationPermission}
+        onRemindersEnabled={saveReminderPreference}
+        onEnableReminders={enableReminders}
       />
       <footer
         style={{
