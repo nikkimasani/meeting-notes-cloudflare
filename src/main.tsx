@@ -314,6 +314,7 @@ function MobileHome({
   onSchedule,
   onSettings,
 }: MobileHomeProps) {
+  const [actionFilter, setActionFilter] = useState<"all" | "overdue" | "high">("all");
   const active = meetings.filter((m) => !m.archived && m.id !== "welcome");
   const visible = active
     .filter((m) =>
@@ -339,6 +340,9 @@ function MobileHome({
       })),
     )
     .filter((item) => !item.done);
+  const overdueCount = actions.filter((item) => item.overdue).length;
+  const highCount = actions.filter((item) => item.detail?.priority === "high").length;
+  const visibleActions = actions.filter((item) => actionFilter === "all" || (actionFilter === "overdue" && item.overdue) || (actionFilter === "high" && item.detail?.priority === "high"));
   const agenda = active
     .filter((m) => m.status === "planned")
     .sort((a, b) => +new Date(a.date) - +new Date(b.date));
@@ -495,8 +499,13 @@ function MobileHome({
                 <span>Open action items</span>
                 <small>{actions.length} remaining</small>
               </div>
+              <div className="action-filters" role="group" aria-label="Filter action items">
+                <button className={actionFilter === "all" ? "active" : ""} onClick={() => setActionFilter("all")}>All ({actions.length})</button>
+                <button className={actionFilter === "overdue" ? "active" : ""} onClick={() => setActionFilter("overdue")}>Overdue ({overdueCount})</button>
+                <button className={actionFilter === "high" ? "active" : ""} onClick={() => setActionFilter("high")}>High priority ({highCount})</button>
+              </div>
               <section className="action-list">
-                {actions.map(({ meeting, task, index, detail, overdue }) => (
+                {visibleActions.map(({ meeting, task, index, detail, overdue }) => (
                   <button
                     key={meeting.id + index}
                     onClick={() => onOpenMeeting(meeting.id)}
@@ -510,6 +519,7 @@ function MobileHome({
                     </span>
                   </button>
                 ))}
+                {visibleActions.length === 0 && <p className="inline-status">No open items match this filter.</p>}
               </section>
             </>
           ) : (
