@@ -50,6 +50,8 @@ import {
   completeRecording,
   getRecording,
   listRecordings,
+  setRecordingBackupStatus,
+  type RecordingBackupStatus,
 } from "./recording-store";
 
 type TranscriptSegment = {
@@ -83,12 +85,14 @@ type Meeting = {
   risks?: string[];
   meetingType?: string;
   language?: string;
+  customVocabulary?: string;
   tags?: string[];
   completed?: boolean[];
   favorite?: boolean;
   audio?: string;
   audioPath?: string;
   localRecordingId?: string;
+  recordingBackupStatus?: RecordingBackupStatus;
   attendees?: string;
   agenda?: string;
   folder?: string;
@@ -836,6 +840,11 @@ function SettingsPanel({
 }
 
 function App() {
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [meetings, setMeetings] = useState<Meeting[]>(load);
   const [selected, setSelected] = useState(meetings[0]?.id || "");
   const [session, setSession] = useState<Session | null>(loadSession);
@@ -877,6 +886,7 @@ function App() {
   const wakeLock = useRef<any>(null);
   const timer = useRef<number | undefined>();
   const recordingId = useRef<string | null>(null);
+  const recordingStartedAt = useRef(0);
   const chunkSequence = useRef(0);
   const chunkWrites = useRef<Promise<void>>(Promise.resolve());
   const audioLoading = useRef(new Set<string>());
@@ -941,7 +951,9 @@ function App() {
                   ? "Recording recovered. Use “Transcribe recording” below when you are ready to retry."
                   : existing.transcript,
               audio: URL.createObjectURL(item.blob),
+              audioPath: existing.audioPath || item.remotePath,
               localRecordingId: item.id,
+              recordingBackupStatus: item.backupStatus,
             });
             continue;
           }
@@ -950,7 +962,9 @@ function App() {
             Math.max(
               1,
               Math.round(
-                (Date.now() - new Date(item.startedAt).getTime()) / 1000,
+                (new Date(item.updatedAt).getTime() -
+                  new Date(item.startedAt).getTime()) /
+                  1000,
               ),
             );
           recovered.push({
@@ -962,10 +976,13 @@ function App() {
             status: "complete",
             transcript:
               "Recording recovered. Use “Transcribe recording” below when you are ready to retry.",
-            summary: "Recovered after the browser closed or refreshed.",
+            summary:
+              "Recovered from continuous local checkpoints after the app closed or refreshed.",
             actions: [],
             audio: URL.createObjectURL(item.blob),
+            audioPath: item.remotePath,
             localRecordingId: item.id,
+            recordingBackupStatus: item.backupStatus,
           });
         }
         setMeetings((currentMeetings) => {
@@ -977,7 +994,7 @@ function App() {
         if (newest) {
           setSelected(newest.id);
           setCloudStatus(
-            "Recovered a recording saved before the browser refreshed.",
+            "Recovered a recording from its latest saved checkpoint.",
           );
         }
       })
@@ -998,6 +1015,10 @@ function App() {
             "screen",
           );
         } catch {}
+      } else if (document.visibilityState === "hidden") {
+        setCloudStatus(
+          "Recording continues; keep the app in the foreground for best reliability.",
+        );
       }
     };
     window.addEventListener("beforeunload", unload);
@@ -1070,6 +1091,9 @@ function App() {
             !!m.archived === showArchived &&
             (folderFilter === "all" ||
               (m.folder || "Unfiled") === folderFilter) &&
+            (typeFilter === "all" ||
+              (m.meetingType || "general") === typeFilter) &&
+            (!favoritesOnly || m.favorite) &&
             (
               m.title +
               " " +
@@ -1081,11 +1105,15 @@ function App() {
               " " +
               (m.tags || []).join(" ") +
               " " +
+              (m.topics || []).join(" ") +
+              " " +
               (m.attendees || "") +
               " " +
               (m.agenda || "") +
               " " +
-              (m.notes || "")
+              (m.notes || "") +
+              " " +
+              Object.values(m.speakerNames || {}).join(" ")
             )
               .toLowerCase()
               .includes(query.toLowerCase()),
@@ -1095,16 +1123,18 @@ function App() {
             Number(!!b.favorite) - Number(!!a.favorite) ||
             +new Date(b.date) - +new Date(a.date),
         ),
-    [meetings, query, showArchived, folderFilter],
+    [meetings, query, showArchived, folderFilter, typeFilter, favoritesOnly],
   );
   const stats = useMemo(() => {
     const active = meetings.filter((m) => !m.archived && m.id !== "welcome");
     const actions = active.flatMap((m) =>
       m.actions.map((task, i) => ({ task, done: !!m.completed?.[i] })),
     );
+    const exactMinutes = active.reduce((n, m) => n + m.duration, 0) / 60;
     return {
       meetings: active.length,
-      minutes: Math.round(active.reduce((n, m) => n + m.duration, 0) / 60),
+      minutes: Math.round(exactMinutes),
+      estimatedCost: exactMinutes * 0.006,
       words: active.reduce(
         (n, m) => n + m.transcript.split(/\s+/).filter(Boolean).length,
         0,
@@ -1174,6 +1204,15 @@ function App() {
         : "webm";
     const path = `${session.user.id}/${m.id}.${extension}`;
     try {
+      if (m.localRecordingId)
+        await setRecordingBackupStatus(m.localRecordingId, "uploading");
+      setMeetings((items) =>
+        items.map((item) =>
+          item.id === m.id
+            ? { ...item, recordingBackupStatus: "uploading" }
+            : item,
+        ),
+      );
       setCloudStatus("Uploading recording securely…");
       await new Promise<void>((resolve, reject) => {
         const upload = new TusUpload(blob, {
@@ -1205,18 +1244,31 @@ function App() {
           })
           .catch(reject);
       });
+      if (m.localRecordingId)
+        await setRecordingBackupStatus(m.localRecordingId, "cloud", path);
       setMeetings((items) =>
         items.map((item) =>
-          item.id === m.id ? { ...item, audioPath: path } : item,
+          item.id === m.id
+            ? { ...item, audioPath: path, recordingBackupStatus: "cloud" }
+            : item,
         ),
       );
       setCloudStatus("Recording backed up securely");
     } catch (e) {
+      if (m.localRecordingId)
+        void setRecordingBackupStatus(m.localRecordingId, "failed");
+      setMeetings((items) =>
+        items.map((item) =>
+          item.id === m.id
+            ? { ...item, recordingBackupStatus: "failed" }
+            : item,
+        ),
+      );
       setError(
         (e instanceof Error ? e.message : "Cloud recording upload failed") +
           " The local recovery copy is still safe.",
       );
-      setCloudStatus("");
+      setCloudStatus("Backup pending — retry when the connection is stable.");
     }
   }
   async function start() {
@@ -1224,13 +1276,16 @@ function App() {
       setError("Confirm that everyone has agreed to the recording.");
       return;
     }
-    if (isIOSDevice() && isStandaloneApp()) {
-      setError(
-        "Recording is not reliable in the iPhone or iPad Home Screen app. Open this site directly in Safari or Chrome to record safely.",
-      );
-      return;
-    }
     try {
+      const estimate = await navigator.storage?.estimate?.();
+      if (
+        estimate?.quota &&
+        estimate.usage !== undefined &&
+        estimate.quota - estimate.usage < 25 * 1024 * 1024
+      )
+        throw new Error(
+          "This device has less than 25 MB available for a safe recording. Free some browser storage and try again.",
+        );
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -1247,6 +1302,7 @@ function App() {
       }
       const id = crypto.randomUUID();
       recordingId.current = id;
+      recordingStartedAt.current = Date.now();
       chunkSequence.current = 0;
       chunkWrites.current = Promise.resolve();
       await beginRecording(id, mr.mimeType);
@@ -1255,8 +1311,17 @@ function App() {
       mr.ondataavailable = (e) => {
         if (!e.data.size) return;
         const sequence = chunkSequence.current++;
+        const duration = Math.max(
+          1,
+          Math.round((Date.now() - recordingStartedAt.current) / 1000),
+        );
         chunkWrites.current = chunkWrites.current
-          .then(() => appendRecordingChunk(id, sequence, e.data))
+          .then(() => appendRecordingChunk(id, sequence, e.data, duration))
+          .then(() =>
+            setCloudStatus(
+              `Recording saved locally · ${sequence + 1} checkpoint${sequence ? "s" : ""}`,
+            ),
+          )
           .catch(() => {
             setError(
               "This device could not save the recording. Keep this page open and stop the recording soon.",
@@ -1269,7 +1334,7 @@ function App() {
         );
         stop();
       };
-      mr.start();
+      mr.start(5000);
       setLive("");
       setElapsed(0);
       setPaused(false);
@@ -1371,6 +1436,12 @@ function App() {
               : "webm";
         form.append("audio", part, `meeting-${index + 1}.${extension}`);
         form.append("language", m.language || language);
+        if (m.customVocabulary?.trim()) {
+          form.append(
+            "prompt",
+            `Preferred spellings, names, and vocabulary: ${m.customVocabulary.trim()}`,
+          );
+        }
         const clientRequestId = crypto.randomUUID();
         const response = await fetch(
           "https://meeting-notes-eta-ecru.vercel.app/api/transcribe",
@@ -1476,7 +1547,11 @@ function App() {
       try {
         await chunkWrites.current;
         if (!id) throw new Error("The recording identifier was lost.");
-        await completeRecording(id, elapsed);
+        const capturedDuration = Math.max(
+          elapsed,
+          Math.round((Date.now() - recordingStartedAt.current) / 1000),
+        );
+        await completeRecording(id, capturedDuration);
         const stored = await getRecording(id);
         if (!stored?.blob.size) throw new Error("No recorded audio was found.");
         const blob = stored.blob;
@@ -1487,7 +1562,7 @@ function App() {
           id,
           title: `Meeting ${new Date().toLocaleDateString()}`,
           date: stored.startedAt,
-          duration: elapsed,
+          duration: capturedDuration,
           language,
           status: "complete",
           transcript: text || "Processing audio…",
@@ -1497,6 +1572,7 @@ function App() {
           actions: result.actions,
           audio,
           localRecordingId: id,
+          recordingBackupStatus: "local",
         };
         setMeetings((v) => [m, ...v.filter((item) => item.id !== id)]);
         setSelected(m.id);
@@ -1646,6 +1722,7 @@ function App() {
         favorite: !!r.metadata?.favorite,
         transcriptSegments: r.metadata?.transcriptSegments || [],
         speakerNames: r.metadata?.speakerNames || {},
+        customVocabulary: r.metadata?.customVocabulary || "",
         attendees: r.metadata?.attendees || "",
         agenda: r.metadata?.agenda || "",
         folder: r.metadata?.folder || "",
@@ -1713,6 +1790,7 @@ function App() {
           favorite: !!m.favorite,
           transcriptSegments: m.transcriptSegments || [],
           speakerNames: m.speakerNames || {},
+          customVocabulary: m.customVocabulary || "",
           attendees: m.attendees || "",
           agenda: m.agenda || "",
           folder: m.folder || "",
@@ -1932,7 +2010,9 @@ function App() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  function exportMeeting(format: "txt" | "md" | "json" | "csv" | "ics") {
+  function exportMeeting(
+    format: "txt" | "md" | "json" | "csv" | "ics" | "srt" | "vtt",
+  ) {
     if (!current) return;
     const section = (name: string, items?: string[]) =>
       items?.length
@@ -1940,6 +2020,26 @@ function App() {
         : "";
     const text = `${current.title}\n${new Date(current.date).toLocaleString()}\nType: ${current.meetingType || "general"}\nAttendees: ${current.attendees || "Not listed"}\n\nSUMMARY\n${current.summary}${section("Key points", current.keyPoints)}${section("Decisions", current.decisions)}${section("Action items", current.actions)}${section("Open questions", current.openQuestions)}${section("Risks", current.risks)}${section("Follow-up agenda", current.followUp)}\n\nNOTES\n${current.notes || ""}\n\nTRANSCRIPT\n${current.transcript}`;
     const base = safeName(current.title);
+    if (format === "srt" || format === "vtt") {
+      const stamp = (seconds: number, webVtt: boolean) => {
+        const ms = Math.max(0, Math.round(seconds * 1000));
+        const hours = Math.floor(ms / 3600000);
+        const minutes = Math.floor((ms % 3600000) / 60000);
+        const secs = Math.floor((ms % 60000) / 1000);
+        const fraction = ms % 1000;
+        return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}${webVtt ? "." : ","}${String(fraction).padStart(3, "0")}`;
+      };
+      const segments = current.transcriptSegments?.length
+        ? current.transcriptSegments
+        : [{ speaker: "Speaker", text: current.transcript, start: 0, end: Math.max(current.duration, 1) }];
+      const body = segments
+        .map((segment, index) => {
+          const speaker = current.speakerNames?.[segment.speaker]?.trim() || segment.speaker.replace(/_/g, " ");
+          return `${format === "srt" ? `${index + 1}\n` : ""}${stamp(segment.start, format === "vtt")} --> ${stamp(Math.max(segment.end, segment.start + 1), format === "vtt")}\n${speaker}: ${segment.text.trim()}`;
+        })
+        .join("\n\n");
+      downloadFile(base + `.${format}`, `${format === "vtt" ? "WEBVTT\n\n" : ""}${body}\n`, format === "vtt" ? "text/vtt" : "application/x-subrip");
+    }
     if (format === "txt") downloadFile(base + ".txt", text);
     if (format === "md")
       downloadFile(
@@ -2136,6 +2236,12 @@ function App() {
             ))}
           </select>
         </label>
+        <div className="library-filters">
+          <select aria-label="Filter by meeting type" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+            <option value="all">All meeting types</option><option value="general">General</option><option value="one-on-one">1:1</option><option value="project">Project update</option><option value="client">Client meeting</option><option value="interview">Interview</option><option value="brainstorm">Brainstorm</option><option value="training">Training</option>
+          </select>
+          <label><input type="checkbox" checked={favoritesOnly} onChange={(e) => setFavoritesOnly(e.target.checked)}/><Star/> Favorites</label>
+        </div>
         <div className="meeting-list">
           {filtered.length ? (
             filtered.map((m) => (
@@ -2257,6 +2363,8 @@ function App() {
                 <button onClick={() => exportMeeting("csv")}>
                   Action items CSV
                 </button>
+                <button onClick={() => exportMeeting("srt")}>SRT captions</button>
+                <button onClick={() => exportMeeting("vtt")}>WebVTT captions</button>
                 <button onClick={() => exportMeeting("ics")}>
                   <CalendarPlus /> Calendar event
                 </button>
@@ -2314,6 +2422,10 @@ function App() {
             <div>
               <b>{stats.done}</b>
               <span>Completed actions</span>
+            </div>
+            <div>
+              <b>${stats.estimatedCost.toFixed(2)}</b>
+              <span>Estimated transcription cost</span>
             </div>
           </section>
         )}
@@ -2419,6 +2531,15 @@ function App() {
                   placeholder="Add context or personal notes"
                   onChange={(e) => update({ notes: e.target.value })}
                 />
+              </label>
+              <label className="wide">
+                Custom vocabulary
+                <textarea
+                  value={current.customVocabulary || ""}
+                  placeholder="Names, organizations, acronyms, and preferred spellings, separated by commas"
+                  onChange={(e) => update({ customVocabulary: e.target.value })}
+                />
+                <small>Used as a spelling hint the next time this recording is transcribed.</small>
               </label>
             </div>
           </details>
@@ -2578,7 +2699,9 @@ function App() {
                               onChange={(e) =>
                                 updateActionDetail(i, {
                                   priority: e.target.value as
-                                    "low" | "medium" | "high",
+                                    | "low"
+                                    | "medium"
+                                    | "high",
                                 })
                               }
                             >
@@ -2648,18 +2771,28 @@ function App() {
               <div className="player">
                 <button
                   onClick={() => {
-                    const el = document.querySelector("audio")!;
+                    const el = audioRef.current;
+                    if (!el) return;
                     playing ? el.pause() : el.play();
                     setPlaying(!playing);
                   }}
                 >
                   {playing ? <Pause /> : <Play />}
                 </button>
-                <audio src={current.audio} onEnded={() => setPlaying(false)} />
+                <audio ref={audioRef} src={current.audio} playbackRate={playbackRate} onTimeUpdate={(e) => setPlaybackTime(e.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
                 <div>
                   <b>Meeting audio</b>
-                  <span>Playback stored on this device</span>
+                  <span>
+                    {fmt(Math.round(playbackTime))} · {current.recordingBackupStatus === "cloud"
+                      ? "Backed up to cloud"
+                      : current.recordingBackupStatus === "uploading"
+                        ? "Cloud backup in progress"
+                        : current.recordingBackupStatus === "failed"
+                          ? "Saved locally · cloud backup pending"
+                          : "Saved locally on this device"}
+                  </span>
                 </div>
+                <label className="playback-speed">Speed<select value={playbackRate} onChange={(e) => {const rate=Number(e.target.value);setPlaybackRate(rate);if(audioRef.current)audioRef.current.playbackRate=rate}}><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
                 {current.localRecordingId && (
                   <button
                     className="transcribe-button"
@@ -2848,14 +2981,14 @@ function App() {
                   </div>
                   <div className="speaker-segments">
                     {current.transcriptSegments.map((segment, i) => (
-                      <div className="speaker-segment" key={i}>
+                      <button className={`speaker-segment ${playbackTime >= segment.start && playbackTime < segment.end ? "active" : ""}`} key={i} onClick={() => {if(!audioRef.current)return;audioRef.current.currentTime=segment.start;void audioRef.current.play()}} aria-label={`Play transcript at ${fmt(Math.round(segment.start))}`}>
                         <b>
                           {current.speakerNames?.[segment.speaker]?.trim() ||
                             segment.speaker.replace(/_/g, " ")}
                         </b>
                         <time>{fmt(Math.round(segment.start))}</time>
                         <p>{segment.text}</p>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 </details>
