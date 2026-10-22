@@ -287,9 +287,10 @@ async function createTranscriptionParts(blob: Blob): Promise<Blob[]> {
 }
 const SB_URL = "https://bazjlrualnmbanmhiuau.supabase.co";
 const SB_KEY = "sb_publishable_ez3TVctnbFIUHqr_dMOUeQ_5WpsYEHs";
-const API_BASE = location.hostname.endsWith(".pages.dev")
-  ? "https://meeting-notes-eta-ecru.vercel.app"
-  : "";
+// Same-origin: on Cloudflare Pages, /api/* is proxied to the Vercel API by
+// functions/api/[[path]].js, so errors arrive as readable responses instead of
+// Safari's opaque "Load failed" cross-origin network error.
+const API_BASE = "";
 type Session = {
   access_token: string;
   refresh_token: string;
@@ -2298,11 +2299,23 @@ function App() {
         form.append("language", m.language || language);
         if (m.customVocabulary?.trim())
           form.append("prompt", m.customVocabulary.trim());
-        const response = await fetch(`${API_BASE}/api/transcribe`, {
-            method: "POST",
-            body: form,
-          }),
-          raw = await response.text();
+        let response: Response | undefined;
+        for (let attempt = 0; attempt < 3 && !response; attempt++) {
+          try {
+            response = await fetch(`${API_BASE}/api/transcribe`, {
+              method: "POST",
+              body: form,
+            });
+          } catch (networkError) {
+            if (attempt === 2)
+              throw new Error(
+                "Couldn't reach the transcription service (connection dropped). Your recording is safe — tap Transcribe recording to try again.",
+              );
+            await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+          }
+        }
+        if (!response) throw new Error("Transcription request failed.");
+        const raw = await response.text();
         let data: any;
         try {
           data = JSON.parse(raw);
