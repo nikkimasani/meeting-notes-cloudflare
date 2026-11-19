@@ -279,69 +279,122 @@ const clearTranscriptionCheckpoint = (meetingId: string) => {
   localStorage.removeItem(transcriptionCheckpointKey(meetingId));
 };
 const TRANSCRIPTION_SAMPLE_RATE = 16000;
-// Decode straight to 16 kHz. Decoding a long meeting at the device's native
-// rate (44.1/48 kHz float32) needs hundreds of MB and makes iOS Safari kill
-// the tab, which silently reloads the app and turns the meeting into a
-// "Recovered meeting" without ever transcribing it.
-async function decodeForTranscription(blob: Blob): Promise<AudioBuffer> {
-  const data = await blob.arrayBuffer();
+function makeDecoder() {
+  // Decoding straight to 16 kHz keeps memory low on phones.
   let offline: OfflineAudioContext | null = null;
   try {
     offline = new OfflineAudioContext(1, 1, TRANSCRIPTION_SAMPLE_RATE);
   } catch {
     offline = null;
   }
-  if (offline) {
-    try {
-      return await offline.decodeAudioData(data.slice(0));
-    } catch {
-      // Fall through to a regular context below.
-    }
-  }
-  const context = new AudioContext();
-  try {
-    return await context.decodeAudioData(data);
-  } catch {
-    throw new Error(
-      "This recording could not be decoded on this device. Your audio is still saved; try downloading it and importing it from a computer.",
-    );
-  } finally {
-    void context.close();
-  }
+  let fallback: AudioContext | null = null;
+  return {
+    async decode(data: ArrayBuffer): Promise<AudioBuffer> {
+      if (offline) {
+        try {
+          return await offline.decodeAudioData(data.slice(0));
+        } catch {
+          /* try a regular context */
+        }
+      }
+      fallback = fallback || new AudioContext();
+      return await fallback.decodeAudioData(data);
+    },
+    close() {
+      if (fallback) void fallback.close();
+    },
+  };
 }
-async function createTranscriptionParts(
-  blob: Blob,
-  secondsPerPart = TRANSCRIPTION_PART_SECONDS,
-): Promise<Blob[]> {
-  let decoded: AudioBuffer | null = await decodeForTranscription(blob);
-  const targetRate = TRANSCRIPTION_SAMPLE_RATE,
-    sourceRate = decoded.sampleRate,
-    channels = Array.from({ length: decoded.numberOfChannels }, (_, c) =>
-      decoded!.getChannelData(c),
-    ),
-    totalFrames = decoded.length,
-    sourceFramesPerPart = secondsPerPart * sourceRate,
-    parts: Blob[] = [];
-  decoded = null;
-  for (
-    let sourceStart = 0;
-    sourceStart < totalFrames;
-    sourceStart += sourceFramesPerPart
-  ) {
-    const sourceEnd = Math.min(totalFrames, sourceStart + sourceFramesPerPart),
-      frameCount = Math.ceil(((sourceEnd - sourceStart) * targetRate) / sourceRate),
-      pcm = new Int16Array(frameCount);
-    for (let i = 0; i < frameCount; i++) {
-      const sourceIndex = Math.min(
-        sourceEnd - 1,
-        sourceStart + Math.floor((i * sourceRate) / targetRate),
+const boxType = (bytes: Uint8Array, at: number) =>
+  String.fromCharCode(bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]);
+// iOS records fragmented MP4 (one fragment per 5 s timeslice). Safari's
+// decodeAudioData only reads the FIRST fragment, so a 38-minute meeting
+// decodes as ~5 seconds. Split into init segment + fragments and decode each.
+function splitFragmentedMp4(
+  bytes: Uint8Array,
+): Array<{ init: Uint8Array; start: number; end: number }> | null {
+  if (bytes.length < 8 || boxType(bytes, 0) !== "ftyp") return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const fragments: Array<{ init: Uint8Array; start: number; end: number }> = [];
+  let initStart = 0,
+    init: Uint8Array | null = null,
+    fragStart = -1,
+    at = 0;
+  const closeFragment = (end: number) => {
+    if (fragStart >= 0 && init) fragments.push({ init, start: fragStart, end });
+    fragStart = -1;
+  };
+  while (at + 8 <= bytes.length) {
+    let size = view.getUint32(at);
+    const type = boxType(bytes, at);
+    if (size === 1 && at + 16 <= bytes.length)
+      size = Number(view.getBigUint64(at + 8));
+    else if (size === 0) size = bytes.length - at;
+    if (size < 8) break;
+    if (type === "ftyp") {
+      closeFragment(at);
+      initStart = at;
+      init = null;
+    } else if (type === "moof") {
+      closeFragment(at);
+      if (!init) init = bytes.subarray(initStart, at);
+      fragStart = at;
+    }
+    at += size;
+  }
+  closeFragment(Math.min(at, bytes.length));
+  return fragments.length > 1 ? fragments : null;
+}
+// Reset each fragment's start time (tfdt) to 0 so it decodes as a standalone
+// 5-second clip instead of being padded with silence up to its offset.
+function zeroFragmentStartTime(piece: Uint8Array, moofAt: number) {
+  const view = new DataView(piece.buffer, piece.byteOffset, piece.byteLength);
+  const walk = (start: number, end: number) => {
+    let at = start;
+    while (at + 8 <= end) {
+      const size = view.getUint32(at),
+        type = boxType(piece, at);
+      if (size < 8 || at + size > end) return;
+      if (type === "traf") walk(at + 8, at + size);
+      else if (type === "tfdt") {
+        if (piece[at + 8] === 1) view.setBigUint64(at + 12, 0n);
+        else view.setUint32(at + 12, 0);
+      }
+      at += size;
+    }
+  };
+  const moofSize = view.getUint32(moofAt);
+  walk(moofAt + 8, moofAt + moofSize);
+}
+class WavPartWriter {
+  parts: Blob[] = [];
+  private buffer: Int16Array;
+  private filled = 0;
+  constructor(private samplesPerPart: number) {
+    this.buffer = new Int16Array(samplesPerPart);
+  }
+  push(audio: AudioBuffer) {
+    const rate = audio.sampleRate,
+      channels = Array.from({ length: audio.numberOfChannels }, (_, c) =>
+        audio.getChannelData(c),
+      ),
+      frames = Math.floor((audio.length * TRANSCRIPTION_SAMPLE_RATE) / rate);
+    for (let i = 0; i < frames; i++) {
+      const src = Math.min(
+        audio.length - 1,
+        Math.floor((i * rate) / TRANSCRIPTION_SAMPLE_RATE),
       );
       let sample = 0;
-      for (let c = 0; c < channels.length; c++) sample += channels[c][sourceIndex];
+      for (let c = 0; c < channels.length; c++) sample += channels[c][src];
       sample = Math.max(-1, Math.min(1, sample / channels.length));
-      pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+      this.buffer[this.filled++] = sample < 0 ? sample * 32768 : sample * 32767;
+      if (this.filled === this.samplesPerPart) this.flush();
     }
-    const header = new ArrayBuffer(44),
+  }
+  flush() {
+    if (!this.filled) return;
+    const pcm = this.buffer.slice(0, this.filled),
+      header = new ArrayBuffer(44),
       view = new DataView(header),
       write = (offset: number, value: string) => {
         for (let i = 0; i < value.length; i++)
@@ -354,17 +407,62 @@ async function createTranscriptionParts(
     view.setUint32(16, 16, true);
     view.setUint16(20, 1, true);
     view.setUint16(22, 1, true);
-    view.setUint32(24, targetRate, true);
-    view.setUint32(28, targetRate * 2, true);
+    view.setUint32(24, TRANSCRIPTION_SAMPLE_RATE, true);
+    view.setUint32(28, TRANSCRIPTION_SAMPLE_RATE * 2, true);
     view.setUint16(32, 2, true);
     view.setUint16(34, 16, true);
     write(36, "data");
     view.setUint32(40, pcm.byteLength, true);
-    parts.push(new Blob([header, pcm.buffer], { type: "audio/wav" }));
+    this.parts.push(new Blob([header, pcm.buffer], { type: "audio/wav" }));
+    this.filled = 0;
   }
-  if (!parts.length)
+}
+async function createTranscriptionParts(
+  blob: Blob,
+  secondsPerPart = TRANSCRIPTION_PART_SECONDS,
+  onProgress?: (fraction: number) => void,
+): Promise<Blob[]> {
+  const bytes = new Uint8Array(await blob.arrayBuffer()),
+    decoder = makeDecoder(),
+    writer = new WavPartWriter(secondsPerPart * TRANSCRIPTION_SAMPLE_RATE);
+  try {
+    const fragments = splitFragmentedMp4(bytes);
+    if (fragments) {
+      let decodedCount = 0;
+      for (let i = 0; i < fragments.length; i++) {
+        const { init, start, end } = fragments[i],
+          piece = new Uint8Array(init.length + (end - start));
+        piece.set(init, 0);
+        piece.set(bytes.subarray(start, end), init.length);
+        zeroFragmentStartTime(piece, init.length);
+        try {
+          writer.push(await decoder.decode(piece.buffer));
+          decodedCount++;
+        } catch {
+          /* skip a damaged fragment (e.g. the last one after a crash) */
+        }
+        if (i % 10 === 0) onProgress?.(i / fragments.length);
+      }
+      if (!decodedCount)
+        throw new Error(
+          "This recording could not be decoded on this device. Your audio is still saved.",
+        );
+    } else {
+      try {
+        writer.push(await decoder.decode(bytes.buffer));
+      } catch {
+        throw new Error(
+          "This recording could not be decoded on this device. Your audio is still saved.",
+        );
+      }
+    }
+    writer.flush();
+  } finally {
+    decoder.close();
+  }
+  if (!writer.parts.length)
     throw new Error("No audio was found in this recording.");
-  return parts;
+  return writer.parts;
 }
 const SB_URL = "https://bazjlrualnmbanmhiuau.supabase.co";
 const SB_KEY = "sb_publishable_ez3TVctnbFIUHqr_dMOUeQ_5WpsYEHs";
@@ -2263,6 +2361,7 @@ function App() {
       const parts = await createTranscriptionParts(
         blob,
         BACKGROUND_TRANSCRIPTION_PART_SECONDS,
+        (f) => setProcessing(`Preparing recording… ${Math.round(f * 100)}%`),
       );
       const chunks = [];
       for (let index = 0; index < parts.length; index++) {
@@ -2505,7 +2604,11 @@ function App() {
             : item,
         ),
       );
-      const parts = await createTranscriptionParts(blob);
+      const parts = await createTranscriptionParts(
+        blob,
+        TRANSCRIPTION_PART_SECONDS,
+        (f) => setProcessing(`Preparing recording… ${Math.round(f * 100)}%`),
+      );
       totalParts = parts.length;
       const saved = loadTranscriptionCheckpoint(m.id);
       if (
