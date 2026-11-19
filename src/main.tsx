@@ -278,65 +278,93 @@ const saveTranscriptionCheckpoint = (
 const clearTranscriptionCheckpoint = (meetingId: string) => {
   localStorage.removeItem(transcriptionCheckpointKey(meetingId));
 };
+const TRANSCRIPTION_SAMPLE_RATE = 16000;
+// Decode straight to 16 kHz. Decoding a long meeting at the device's native
+// rate (44.1/48 kHz float32) needs hundreds of MB and makes iOS Safari kill
+// the tab, which silently reloads the app and turns the meeting into a
+// "Recovered meeting" without ever transcribing it.
+async function decodeForTranscription(blob: Blob): Promise<AudioBuffer> {
+  const data = await blob.arrayBuffer();
+  let offline: OfflineAudioContext | null = null;
+  try {
+    offline = new OfflineAudioContext(1, 1, TRANSCRIPTION_SAMPLE_RATE);
+  } catch {
+    offline = null;
+  }
+  if (offline) {
+    try {
+      return await offline.decodeAudioData(data.slice(0));
+    } catch {
+      // Fall through to a regular context below.
+    }
+  }
+  const context = new AudioContext();
+  try {
+    return await context.decodeAudioData(data);
+  } catch {
+    throw new Error(
+      "This recording could not be decoded on this device. Your audio is still saved; try downloading it and importing it from a computer.",
+    );
+  } finally {
+    void context.close();
+  }
+}
 async function createTranscriptionParts(
   blob: Blob,
   secondsPerPart = TRANSCRIPTION_PART_SECONDS,
 ): Promise<Blob[]> {
-  const context = new AudioContext();
-  try {
-    const decoded = await context.decodeAudioData(await blob.arrayBuffer());
-    const targetRate = 16000,
-      sourceFramesPerPart = secondsPerPart * decoded.sampleRate,
-      parts: Blob[] = [];
-    for (
-      let sourceStart = 0;
-      sourceStart < decoded.length;
-      sourceStart += sourceFramesPerPart
-    ) {
-      const sourceEnd = Math.min(
-          decoded.length,
-          sourceStart + sourceFramesPerPart,
-        ),
-        frameCount = Math.ceil(
-          ((sourceEnd - sourceStart) * targetRate) / decoded.sampleRate,
-        ),
-        pcm = new Int16Array(frameCount);
-      for (let i = 0; i < frameCount; i++) {
-        const sourceIndex = Math.min(
-          sourceEnd - 1,
-          sourceStart + Math.floor((i * decoded.sampleRate) / targetRate),
-        );
-        let sample = 0;
-        for (let channel = 0; channel < decoded.numberOfChannels; channel++)
-          sample += decoded.getChannelData(channel)[sourceIndex];
-        sample = Math.max(-1, Math.min(1, sample / decoded.numberOfChannels));
-        pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
-      }
-      const header = new ArrayBuffer(44),
-        view = new DataView(header),
-        write = (offset: number, value: string) => {
-          for (let i = 0; i < value.length; i++)
-            view.setUint8(offset + i, value.charCodeAt(i));
-        };
-      write(0, "RIFF");
-      view.setUint32(4, 36 + pcm.byteLength, true);
-      write(8, "WAVE");
-      write(12, "fmt ");
-      view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true);
-      view.setUint16(22, 1, true);
-      view.setUint32(24, targetRate, true);
-      view.setUint32(28, targetRate * 2, true);
-      view.setUint16(32, 2, true);
-      view.setUint16(34, 16, true);
-      write(36, "data");
-      view.setUint32(40, pcm.byteLength, true);
-      parts.push(new Blob([header, pcm.buffer], { type: "audio/wav" }));
+  let decoded: AudioBuffer | null = await decodeForTranscription(blob);
+  const targetRate = TRANSCRIPTION_SAMPLE_RATE,
+    sourceRate = decoded.sampleRate,
+    channels = Array.from({ length: decoded.numberOfChannels }, (_, c) =>
+      decoded!.getChannelData(c),
+    ),
+    totalFrames = decoded.length,
+    sourceFramesPerPart = secondsPerPart * sourceRate,
+    parts: Blob[] = [];
+  decoded = null;
+  for (
+    let sourceStart = 0;
+    sourceStart < totalFrames;
+    sourceStart += sourceFramesPerPart
+  ) {
+    const sourceEnd = Math.min(totalFrames, sourceStart + sourceFramesPerPart),
+      frameCount = Math.ceil(((sourceEnd - sourceStart) * targetRate) / sourceRate),
+      pcm = new Int16Array(frameCount);
+    for (let i = 0; i < frameCount; i++) {
+      const sourceIndex = Math.min(
+        sourceEnd - 1,
+        sourceStart + Math.floor((i * sourceRate) / targetRate),
+      );
+      let sample = 0;
+      for (let c = 0; c < channels.length; c++) sample += channels[c][sourceIndex];
+      sample = Math.max(-1, Math.min(1, sample / channels.length));
+      pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
     }
-    return parts.length ? parts : [blob];
-  } finally {
-    void context.close();
+    const header = new ArrayBuffer(44),
+      view = new DataView(header),
+      write = (offset: number, value: string) => {
+        for (let i = 0; i < value.length; i++)
+          view.setUint8(offset + i, value.charCodeAt(i));
+      };
+    write(0, "RIFF");
+    view.setUint32(4, 36 + pcm.byteLength, true);
+    write(8, "WAVE");
+    write(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, targetRate, true);
+    view.setUint32(28, targetRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    write(36, "data");
+    view.setUint32(40, pcm.byteLength, true);
+    parts.push(new Blob([header, pcm.buffer], { type: "audio/wav" }));
   }
+  if (!parts.length)
+    throw new Error("No audio was found in this recording.");
+  return parts;
 }
 const SB_URL = "https://bazjlrualnmbanmhiuau.supabase.co";
 const SB_KEY = "sb_publishable_ez3TVctnbFIUHqr_dMOUeQ_5WpsYEHs";
@@ -2426,29 +2454,11 @@ function App() {
     m: Meeting,
     preferBackground = true,
   ) {
-    if (preferBackground) {
-      if (!session) {
-        setMeetings((items) =>
-          items.map((item) =>
-            item.id === m.id
-              ? {
-                  ...item,
-                  transcriptionState: "awaiting_sign_in",
-                  transcriptionProgress: 0,
-                  transcriptionError:
-                    "Sign in once to upload this recording securely. After upload, you may close the app while transcription continues.",
-                }
-              : item,
-          ),
-        );
-        setCloudStatus(
-          "Sign in to start durable background transcription. Your recording remains saved on this device.",
-        );
-        setSettingsOpen(true);
-        return;
-      }
-      await queueBackgroundTranscription(blob, m);
-      return;
+    // Background (server-side) transcription needs a signed-in account. When
+    // there is no session, or the queue cannot start, transcribe directly from
+    // this device instead of leaving the meeting stuck.
+    if (preferBackground && session && navigator.onLine) {
+      if (await queueBackgroundTranscription(blob, m)) return;
     }
     if (localTranscriptionRunning.current.has(m.id)) return;
     localTranscriptionRunning.current.add(m.id);
@@ -2733,23 +2743,31 @@ function App() {
       setError("The original recording is not available on this device.");
       return;
     }
+    const target = current;
     try {
-      const stored = await getRecording(current.localRecordingId);
+      setProcessing("Loading saved recording…");
+      const stored = await getRecording(target.localRecordingId!);
       if (!stored?.blob.size)
         throw new Error(
           "The saved recording could not be found on this device.",
         );
       await processAudio(
         stored.blob,
-        { ...current, transcriptionJobId: undefined },
+        { ...target, transcriptionJobId: undefined },
         true,
       );
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? e.message
-          : "The saved recording could not be loaded.",
+      const message =
+        e instanceof Error ? e.message : "The saved recording could not be loaded.";
+      setError(message);
+      setMeetings((items) =>
+        items.map((item) =>
+          item.id === target.id
+            ? { ...item, transcriptionState: "failed", transcriptionError: message }
+            : item,
+        ),
       );
+      setProcessing("");
     }
   }
   function stop() {
