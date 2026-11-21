@@ -40,9 +40,24 @@ import {
   CheckSquare2,
   Bell,
   ChevronLeft,
+  ChevronRight,
+  AudioLines,
+  CircleAlert,
+  Loader2,
+  CheckCircle2,
+  Clock3,
+  Users,
+  Sparkles,
+  MoreHorizontal,
+  MessageSquareText,
+  ChevronDown,
+  Info,
+  Check,
 } from "lucide-react";
+import "@fontsource-variable/geist";
+import "@fontsource/geist-mono/400.css";
+import "@fontsource/instrument-serif/400.css";
 import "./styles.css";
-import "./mobile.css";
 import { Upload as TusUpload } from "tus-js-client";
 import {
   appendRecordingChunk,
@@ -220,8 +235,74 @@ const summarize = (text: string) => {
   ];
   return { summary: parts.filter(Boolean).join("\n\n"), actions };
 };
-const fmt = (s: number) =>
-  `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const fmt = (total: number) => {
+  const s = Math.max(0, Math.floor(total || 0)),
+    h = Math.floor(s / 3600),
+    m = Math.floor((s % 3600) / 60),
+    sec = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+};
+const humanDuration = (total: number) => {
+  const minutes = Math.round((total || 0) / 60);
+  if (!total) return "";
+  if (minutes < 1) return "<1 min";
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} hr ${minutes % 60 ? (minutes % 60) + " min" : ""}`.trim();
+};
+const isIsoDate = (value?: string | null) =>
+  !!value && /^\d{4}-\d{2}-\d{2}$/.test(value);
+const formatDue = (value?: string | null) =>
+  !value
+    ? ""
+    : isIsoDate(value)
+      ? new Date(value + "T00:00:00").toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        })
+      : value;
+const isOverdue = (value?: string | null) =>
+  isIsoDate(value) && new Date(value + "T23:59:59") < new Date();
+// Placeholder text the app writes into a transcript before real speech exists.
+const hasRealTranscript = (text?: string) => {
+  const t = (text || "").trim();
+  return (
+    t.length > 0 &&
+    !/^(processing audio…|recording recovered\.|transcription queued safely)/i.test(t) &&
+    t !== seed[0].transcript
+  );
+};
+type TranscriptionView = {
+  tone: "neutral" | "busy" | "warn" | "ok";
+  label: string;
+  progress?: number;
+};
+const transcriptionView = (m: Meeting): TranscriptionView | null => {
+  const st = m.transcriptionState;
+  const progress = m.transcriptionTotalParts
+    ? (m.transcriptionCompletedParts || 0) / m.transcriptionTotalParts
+    : m.transcriptionProgress;
+  if (st === "uploading") return { tone: "busy", label: "Uploading audio", progress };
+  if (st === "queued") return { tone: "busy", label: "Queued for transcription", progress };
+  if (st === "processing" || st === "retrying")
+    return { tone: "busy", label: "Transcribing", progress };
+  if (st === "partial") return { tone: "warn", label: "Transcription paused", progress };
+  if (st === "failed" || st === "canceled")
+    return { tone: "warn", label: "Transcription failed" };
+  if (st === "awaiting_sign_in") return { tone: "warn", label: "Waiting to transcribe" };
+  if (m.localRecordingId && !hasRealTranscript(m.transcript))
+    return { tone: "warn", label: "Needs transcription" };
+  return null;
+};
+const reminderMessage = (
+  permission: NotificationPermission | "unsupported",
+) =>
+  permission === "granted"
+    ? "Notifications are allowed on this device."
+    : permission === "denied"
+      ? "Notifications are blocked. Allow them in your browser settings."
+      : permission === "unsupported"
+        ? "This browser does not support notifications."
+        : "Turn on to allow reminder notifications.";
 const captionTime = (seconds: number, separator: "," | ".") => {
   const safe = Math.max(0, seconds || 0),
     hours = Math.floor(safe / 3600),
@@ -485,6 +566,53 @@ const loadSession = (): Session | null => {
 };
 
 type Theme = "system" | "light" | "dark";
+function AutoTextarea({
+  value,
+  onChange,
+  placeholder,
+  className,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  ariaLabel?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  const resize = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + 2 + "px";
+  };
+  React.useLayoutEffect(resize, [value]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let width = el.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth !== width) {
+        width = el.clientWidth;
+        resize();
+      }
+    });
+    observer.observe(el);
+    void document.fonts?.ready.then(resize);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      className={`auto-textarea ${className || ""}`}
+      aria-label={ariaLabel}
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
 type MobileTab = "conversations" | "calendar" | "actions";
 type MobileHomeProps = {
   meetings: Meeting[];
@@ -496,6 +624,9 @@ type MobileHomeProps = {
   onRecord: () => void;
   onSchedule: () => void;
   onSettings: () => void;
+  onImport: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onToggleAction: (meetingId: string, index: number) => void;
+  signedIn: boolean;
 };
 const dateHeading = (iso: string) => {
   const date = new Date(iso),
@@ -509,8 +640,65 @@ const dateHeading = (iso: string) => {
     weekday: "long",
     month: "long",
     day: "numeric",
+    ...(date.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
   });
 };
+const timeLabel = (iso: string) =>
+  new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+function StatusBadge({ view }: { view: TranscriptionView | null }) {
+  if (!view) return null;
+  return (
+    <span className={`badge badge-${view.tone}`}>
+      {view.tone === "busy" ? <Loader2 className="spin" /> : <CircleAlert />}
+      {view.label}
+      {view.tone === "busy" && view.progress ? ` · ${Math.round(view.progress * 100)}%` : ""}
+    </span>
+  );
+}
+function ConversationCard({
+  meeting,
+  onOpen,
+}: {
+  meeting: Meeting;
+  onOpen: () => void;
+}) {
+  const view = transcriptionView(meeting);
+  const open = meeting.actions.filter((_, i) => !meeting.completed?.[i]).length;
+  const summary = hasRealTranscript(meeting.transcript) || !meeting.localRecordingId
+    ? meeting.summary
+    : "";
+  return (
+    <button className="conversation-card" onClick={onOpen}>
+      <span className="conversation-time">
+        <b>{timeLabel(meeting.date)}</b>
+        {meeting.duration ? <small>{humanDuration(meeting.duration)}</small> : null}
+      </span>
+      <span className="conversation-body">
+        <span className="conversation-title">
+          {meeting.favorite && <Star className="fav" />}
+          <b>{meeting.title}</b>
+        </span>
+        {summary && <p>{summary.replace(/\s+/g, " ").slice(0, 180)}</p>}
+        {(view || open > 0 || (meeting.tags?.length || 0) > 0) && (
+          <span className="conversation-meta">
+            <StatusBadge view={view} />
+            {open > 0 && (
+              <span className="badge">
+                <ListChecks /> {open} open
+              </span>
+            )}
+            {meeting.tags?.slice(0, 2).map((tag) => (
+              <span className="badge badge-tag" key={tag}>
+                #{tag}
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
+      <ChevronRight className="chev" />
+    </button>
+  );
+}
 function MobileHome({
   meetings,
   query,
@@ -521,14 +709,18 @@ function MobileHome({
   onRecord,
   onSchedule,
   onSettings,
+  onImport,
+  onToggleAction,
+  signedIn,
 }: MobileHomeProps) {
   const [actionFilter, setActionFilter] = useState<"all" | "overdue" | "high">(
     "all",
   );
   const active = meetings.filter((m) => !m.archived && m.id !== "welcome");
   const visible = active
+    .filter((m) => m.status !== "planned")
     .filter((m) =>
-      (m.title + " " + m.summary + " " + m.transcript)
+      (m.title + " " + m.summary + " " + m.transcript + " " + (m.tags || []).join(" "))
         .toLowerCase()
         .includes(query.toLowerCase()),
     )
@@ -545,9 +737,7 @@ function MobileHome({
         task,
         index,
         detail: meeting.actionDetails?.[index],
-        overdue:
-          !!meeting.actionDetails?.[index]?.due &&
-          new Date(meeting.actionDetails[index].due + "T23:59:59") < new Date(),
+        overdue: isOverdue(meeting.actionDetails?.[index]?.due),
         done: !!meeting.completed?.[index],
       })),
     )
@@ -562,109 +752,102 @@ function MobileHome({
       (actionFilter === "overdue" && item.overdue) ||
       (actionFilter === "high" && item.detail?.priority === "high"),
   );
+  const now = Date.now();
   const agenda = active
     .filter((m) => m.status === "planned")
     .sort((a, b) => +new Date(a.date) - +new Date(b.date));
+  const upcoming = agenda.filter((m) => +new Date(m.date) >= now - 3600_000);
+  const past = agenda.filter((m) => +new Date(m.date) < now - 3600_000);
+  const nextUp = upcoming[0];
+  const titles: Record<MobileTab, string> = {
+    conversations: "Conversations",
+    calendar: "Agenda",
+    actions: "Action items",
+  };
   return (
     <section className="mobile-home">
       <header className="home-top">
         <div className="wordmark" aria-label="Said and Done">
           <img src="/saiddone-mark.png" alt="" />
-          <b>Said and Done</b>
+          <span>Said and Done</span>
         </div>
         <div className="home-actions">
-          <button
-            aria-label="Search conversations"
-            onClick={() => document.getElementById("mobile-search")?.focus()}
-          >
-            <Search />
-          </button>
-          <button aria-label="Schedule a meeting" onClick={onSchedule}>
-            <Plus />
+          <label className="icon-button" aria-label="Import audio" title="Import audio">
+            <Upload />
+            <input type="file" accept="audio/*,video/*" onChange={onImport} />
+          </label>
+          <button className="icon-button" aria-label="Schedule a meeting" onClick={onSchedule}>
+            <CalendarPlus />
           </button>
           <button
-            aria-label="View action items"
-            title="View action items"
-            onClick={() => onTab("actions")}
+            className="avatar-button"
+            aria-label="Open settings"
+            onClick={onSettings}
           >
-            <Bell />
+            <Settings />
+            {signedIn && <i className="dot" />}
           </button>
         </div>
       </header>
-      <nav className="home-tabs" aria-label="Meeting views">
-        <button
-          className={tab === "conversations" ? "active" : ""}
-          onClick={() => onTab("conversations")}
-        >
-          Conversations
-        </button>
-        <button
-          className={tab === "calendar" ? "active" : ""}
-          onClick={() => onTab("calendar")}
-        >
-          Calendar
-        </button>
-        <button
-          className={tab === "actions" ? "active" : ""}
-          onClick={() => onTab("actions")}
-        >
-          Action items
-        </button>
-      </nav>
+      <h1 className="home-title">{titles[tab]}</h1>
       {tab === "conversations" ? (
         <div className="home-content">
-          <div className="home-filter">
+          <div className="search-field">
             <Search />
             <input
               id="mobile-search"
+              type="search"
               aria-label="Search conversations"
               placeholder="Search conversations"
               value={query}
               onChange={(e) => onQuery(e.target.value)}
             />
+            {query && (
+              <button aria-label="Clear search" onClick={() => onQuery("")}>
+                <X />
+              </button>
+            )}
           </div>
+          {nextUp && !query && (
+            <button className="next-up" onClick={() => onOpenMeeting(nextUp.id)}>
+              <span className="next-up-date">
+                <small>
+                  {new Date(nextUp.date).toLocaleDateString(undefined, { month: "short" })}
+                </small>
+                <b>{new Date(nextUp.date).getDate()}</b>
+              </span>
+              <span>
+                <small>Up next · {timeLabel(nextUp.date)}</small>
+                <b>{nextUp.title}</b>
+              </span>
+              <ChevronRight />
+            </button>
+          )}
           {Object.keys(groups).length ? (
             Object.entries(groups).map(([label, items]) => (
               <section className="conversation-group" key={label}>
                 <h2>{label}</h2>
-                {items.map((meeting) => (
-                  <button
-                    className="conversation-row"
-                    key={meeting.id}
-                    onClick={() => onOpenMeeting(meeting.id)}
-                  >
-                    <span className="conversation-avatar">
-                      <Mic />
-                    </span>
-                    <span className="conversation-card">
-                      <b>{meeting.title}</b>
-                      <small>
-                        {new Date(meeting.date).toLocaleTimeString([], {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}{" "}
-                        · {fmt(meeting.duration)}
-                      </small>
-                      {meeting.summary && (
-                        <p>
-                          {meeting.summary.replace(/\n/g, " ").slice(0, 150)}
-                        </p>
-                      )}
-                    </span>
-                  </button>
-                ))}
+                <div className="card-stack">
+                  {items.map((meeting) => (
+                    <ConversationCard
+                      key={meeting.id}
+                      meeting={meeting}
+                      onOpen={() => onOpenMeeting(meeting.id)}
+                    />
+                  ))}
+                </div>
               </section>
             ))
+          ) : query ? (
+            <p className="empty-inline">No conversations match “{query}”.</p>
           ) : (
             <div className="home-empty">
-              <span>
-                <Mic />
+              <span className="empty-icon">
+                <AudioLines />
               </span>
               <h2>Your conversations live here</h2>
-              <p>
-                Record or import a meeting to create your first set of notes.
-              </p>
-              <button onClick={onRecord}>
+              <p>Record or import a meeting and you’ll get a transcript, summary, and action items.</p>
+              <button className="btn btn-record" onClick={onRecord}>
                 <Mic /> Start recording
               </button>
             </div>
@@ -672,45 +855,74 @@ function MobileHome({
         </div>
       ) : tab === "calendar" ? (
         <div className="home-content">
-          <div className="view-heading">
-            <span>My agenda</span>
-            <button onClick={onSchedule}>
-              <Plus /> Add meeting
-            </button>
-          </div>
+          <button className="btn btn-secondary btn-block" onClick={onSchedule}>
+            <Plus /> Schedule a meeting
+          </button>
           {agenda.length ? (
-            <section className="agenda-list">
-              <h2>Upcoming</h2>
-              {agenda.map((meeting) => (
-                <button
-                  key={meeting.id}
-                  onClick={() => onOpenMeeting(meeting.id)}
-                >
-                  <span>
-                    <b>{meeting.title}</b>
-                    <small>
-                      {new Date(meeting.date).toLocaleString([], {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </small>
-                  </span>
-                  <CalendarDays />
-                </button>
-              ))}
-            </section>
+            <>
+              {upcoming.length > 0 && (
+                <section className="conversation-group">
+                  <h2>Upcoming</h2>
+                  <div className="card-stack">
+                    {upcoming.map((meeting) => (
+                      <button
+                        className="agenda-card"
+                        key={meeting.id}
+                        onClick={() => onOpenMeeting(meeting.id)}
+                      >
+                        <span className="next-up-date">
+                          <small>
+                            {new Date(meeting.date).toLocaleDateString(undefined, { month: "short" })}
+                          </small>
+                          <b>{new Date(meeting.date).getDate()}</b>
+                        </span>
+                        <span className="conversation-body">
+                          <b>{meeting.title}</b>
+                          <small>
+                            {new Date(meeting.date).toLocaleDateString(undefined, { weekday: "long" })} · {timeLabel(meeting.date)}
+                            {meeting.attendees ? ` · ${meeting.attendees}` : ""}
+                          </small>
+                        </span>
+                        <ChevronRight className="chev" />
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {past.length > 0 && (
+                <section className="conversation-group">
+                  <h2>Past, not recorded</h2>
+                  <div className="card-stack">
+                    {past.map((meeting) => (
+                      <button
+                        className="agenda-card muted"
+                        key={meeting.id}
+                        onClick={() => onOpenMeeting(meeting.id)}
+                      >
+                        <span className="next-up-date">
+                          <small>
+                            {new Date(meeting.date).toLocaleDateString(undefined, { month: "short" })}
+                          </small>
+                          <b>{new Date(meeting.date).getDate()}</b>
+                        </span>
+                        <span className="conversation-body">
+                          <b>{meeting.title}</b>
+                          <small>{timeLabel(meeting.date)}</small>
+                        </span>
+                        <ChevronRight className="chev" />
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
           ) : (
             <div className="home-empty">
-              <span>
+              <span className="empty-icon">
                 <CalendarDays />
               </span>
               <h2>Your agenda is clear</h2>
-              <p>Scheduled meetings will appear here.</p>
-              <button onClick={onSchedule}>
-                <Plus /> Schedule a meeting
-              </button>
+              <p>Schedule a meeting to prepare an agenda and record it when it starts.</p>
             </div>
           )}
         </div>
@@ -718,91 +930,85 @@ function MobileHome({
         <div className="home-content">
           {actions.length ? (
             <>
-              <div className="view-heading">
-                <span>Open action items</span>
-                <small>{actions.length} remaining</small>
+              <div className="segmented" role="group" aria-label="Filter action items">
+                {(
+                  [
+                    ["all", `All · ${actions.length}`],
+                    ["overdue", `Overdue · ${overdueCount}`],
+                    ["high", `High · ${highCount}`],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    className={actionFilter === key ? "active" : ""}
+                    onClick={() => setActionFilter(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
-              <div
-                className="action-filters"
-                role="group"
-                aria-label="Filter action items"
-              >
-                <button
-                  className={actionFilter === "all" ? "active" : ""}
-                  onClick={() => setActionFilter("all")}
-                >
-                  All ({actions.length})
-                </button>
-                <button
-                  className={actionFilter === "overdue" ? "active" : ""}
-                  onClick={() => setActionFilter("overdue")}
-                >
-                  Overdue ({overdueCount})
-                </button>
-                <button
-                  className={actionFilter === "high" ? "active" : ""}
-                  onClick={() => setActionFilter("high")}
-                >
-                  High priority ({highCount})
-                </button>
-              </div>
-              <section className="action-list">
-                {visibleActions.map(
-                  ({ meeting, task, index, detail, overdue }) => (
+              <div className="card-stack">
+                {visibleActions.map(({ meeting, task, index, detail, overdue }) => (
+                  <div className="task-card" key={meeting.id + index}>
                     <button
-                      key={meeting.id + index}
-                      onClick={() => onOpenMeeting(meeting.id)}
-                    >
-                      <span className="action-check" />
-                      <span>
-                        <b>{task}</b>
-                        <small>
-                          {meeting.title}
-                          {detail?.owner ? " · Owner: " + detail.owner : ""}
-                        </small>
-                        {detail?.due && (
-                          <small>
-                            Due{" "}
-                            {new Date(
-                              detail.due + "T00:00:00",
-                            ).toLocaleDateString()}
-                            {overdue ? " · OVERDUE" : ""}
-                          </small>
+                      className="task-check"
+                      aria-label={"Mark done: " + task}
+                      onClick={() => onToggleAction(meeting.id, index)}
+                    />
+                    <button className="task-body" onClick={() => onOpenMeeting(meeting.id)}>
+                      <b>{task}</b>
+                      <span className="conversation-meta">
+                        {detail?.priority === "high" && (
+                          <span className="badge badge-warn">High</span>
                         )}
-                        <small>Priority: {detail?.priority || "medium"}</small>
+                        {detail?.due && (
+                          <span className={overdue ? "badge badge-danger" : "badge"}>
+                            <Clock3 /> {overdue ? "Overdue · " : ""}
+                            {formatDue(detail.due)}
+                          </span>
+                        )}
+                        {detail?.owner && (
+                          <span className="badge">
+                            <Users /> {detail.owner}
+                          </span>
+                        )}
                       </span>
+                      <small>{meeting.title}</small>
                     </button>
-                  ),
-                )}
+                  </div>
+                ))}
                 {visibleActions.length === 0 && (
-                  <p className="inline-status">
-                    No open items match this filter.
-                  </p>
+                  <p className="empty-inline">No open items match this filter.</p>
                 )}
-              </section>
+              </div>
             </>
           ) : (
             <div className="home-empty">
-              <span>
-                <CheckSquare2 />
+              <span className="empty-icon">
+                <CheckCircle2 />
               </span>
-              <h2>No open action items</h2>
-              <p>Tasks from your meeting summaries will appear here.</p>
+              <h2>All caught up</h2>
+              <p>Action items from your meeting summaries will appear here.</p>
             </div>
           )}
         </div>
       )}
-      <nav className="app-nav" aria-label="Mobile navigation">
+      <nav className="app-nav" aria-label="Main navigation">
         <button
           className={tab === "conversations" ? "active" : ""}
+          aria-current={tab === "conversations" ? "page" : undefined}
           onClick={() => onTab("conversations")}
         >
           <Home />
           <span>Home</span>
         </button>
-        <button onClick={() => onTab("calendar")}>
+        <button
+          className={tab === "calendar" ? "active" : ""}
+          aria-current={tab === "calendar" ? "page" : undefined}
+          onClick={() => onTab("calendar")}
+        >
           <CalendarDays />
-          <span>Calendar</span>
+          <span>Agenda</span>
         </button>
         <button
           className="record-orb"
@@ -811,13 +1017,18 @@ function MobileHome({
         >
           <Mic />
         </button>
-        <button onClick={() => onTab("actions")}>
+        <button
+          className={tab === "actions" ? "active" : ""}
+          aria-current={tab === "actions" ? "page" : undefined}
+          onClick={() => onTab("actions")}
+        >
           <CheckSquare2 />
-          <span>Actions</span>
+          <span>Tasks</span>
+          {actions.length > 0 && <i className="nav-count">{actions.length}</i>}
         </button>
         <button onClick={onSettings}>
           <Settings />
-          <span>Account</span>
+          <span>Settings</span>
         </button>
       </nav>
     </section>
@@ -860,6 +1071,7 @@ type SettingsPanelProps = {
   onConnectCalendar: (provider: string) => void;
   onDisconnectCalendar: (provider: string) => void;
   onSyncCalendars: () => void;
+  calendarHistory: any[];
 };
 function SettingsPanel({
   open,
@@ -898,6 +1110,7 @@ function SettingsPanel({
   onConnectCalendar,
   onDisconnectCalendar,
   onSyncCalendars,
+  calendarHistory,
 }: SettingsPanelProps) {
   const panel = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -1044,6 +1257,10 @@ function SettingsPanel({
                 </p>
               </div>
             </div>
+            {!session && (
+              <p className="inline-status">Sign in above to connect a calendar.</p>
+            )}
+            {session && (<>
             <p className="inline-status">
               Only meetings in your Said and Done agenda are linked. Unrelated
               calendar events stay out of your library; deletions are reported
@@ -1087,6 +1304,7 @@ function SettingsPanel({
                 {calendarBusy ? "Syncing…" : "Sync both calendars"}
               </button>
             </div>
+            </>)}
             {calendarStatus && (
               <p className="inline-status" role="status">
                 {calendarStatus}
@@ -1355,7 +1573,7 @@ function App() {
   const media = useRef<MediaRecorder | null>(null);
   const recognition = useRef<any>(null);
   const wakeLock = useRef<any>(null);
-  const timer = useRef<number | undefined>();
+  const timer = useRef<number | undefined>(undefined);
   const recordingId = useRef<string | null>(null);
   const recordingStartedAt = useRef(0);
   const chunkSequence = useRef(0);
@@ -1366,6 +1584,68 @@ function App() {
   const autoResumeAttempted = useRef(new Set<string>());
   const autoBackgroundQueueAttempted = useRef(new Set<string>());
   const audioPlayer = useRef<HTMLAudioElement | null>(null);
+  const pausedAt = useRef(0);
+  const pausedTotal = useRef(0);
+  const recordingTarget = useRef<string | null>(null);
+  const [toast, setToast] = useState("");
+  const toastTimer = useRef<number | undefined>(undefined);
+  function notify(message: string) {
+    setToast(message);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(""), 2600);
+  }
+  // Supabase access tokens expire after an hour; refresh before they do so
+  // sync, cloud backup and background transcription keep working.
+  useEffect(() => {
+    if (!session?.refresh_token) return;
+    const expiresAt = (() => {
+      try {
+        const payload = JSON.parse(
+          atob(session.access_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")),
+        );
+        return Number(payload.exp) * 1000;
+      } catch {
+        return 0;
+      }
+    })();
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const response = await fetch(
+          SB_URL + "/auth/v1/token?grant_type=refresh_token",
+          {
+            method: "POST",
+            headers: { apikey: SB_KEY, "content-type": "application/json" },
+            body: JSON.stringify({ refresh_token: session.refresh_token }),
+          },
+        );
+        const data = await response.json().catch(() => null);
+        if (cancelled) return;
+        if (response.ok && data?.access_token) setSession(data);
+        else if (response.status === 400 || response.status === 401) {
+          setSession(null);
+          setCloudStatus("Your sign-in expired. Sign in again to keep syncing.");
+        }
+      } catch {
+        /* offline: try again later */
+      }
+    };
+    const wait = Math.max(0, expiresAt - Date.now() - 5 * 60 * 1000);
+    const id = window.setTimeout(() => void refresh(), wait);
+    const onVisible = () => {
+      if (
+        document.visibilityState === "visible" &&
+        expiresAt - Date.now() < 5 * 60 * 1000
+      )
+        void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [session?.access_token]);
   function showReminderFallback(
     title: string,
     body: string,
@@ -1503,6 +1783,21 @@ function App() {
   ]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const action = params.get("action"),
+      focus = params.get("focus");
+    if (!action && !focus) return;
+    if (action === "new") startMobileMeeting();
+    if (focus === "search")
+      window.setTimeout(
+        () =>
+          (document.getElementById("mobile-search") ||
+            document.querySelector<HTMLInputElement>(".sidebar input[type=search]"))?.focus(),
+        300,
+      );
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
     const id = params.get("openMeeting");
     if (!id) return;
     const meeting = meetings.find((item) => item.id === id);
@@ -1517,7 +1812,18 @@ function App() {
     );
   }, [meetings]);
   useEffect(() => {
-    localStorage.setItem(storeKey, JSON.stringify(meetings));
+    try {
+      localStorage.setItem(
+        storeKey,
+        JSON.stringify(
+          meetings.map(({ audio, ...rest }) =>
+            audio && !audio.startsWith("blob:") ? { ...rest, audio } : rest,
+          ),
+        ),
+      );
+    } catch (e) {
+      console.warn("Could not save meetings", e);
+    }
   }, [meetings]);
   useEffect(() => {
     if ("serviceWorker" in navigator)
@@ -2263,6 +2569,12 @@ function App() {
         stop();
       };
       mr.start(5000);
+      pausedTotal.current = 0;
+      pausedAt.current = 0;
+      recordingTarget.current =
+        current && current.status === "planned" && !current.localRecordingId
+          ? current.id
+          : null;
       setLive("");
       setElapsed(0);
       setPaused(false);
@@ -2314,19 +2626,25 @@ function App() {
         meetingType: m.meetingType || "general",
       }),
     });
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "Analysis failed");
+    const list = (value: unknown) =>
+      Array.isArray(value) ? value.filter(Boolean).map(String) : [];
+    const items: ActionItem[] = Array.isArray(data.action_items)
+      ? data.action_items.filter((x: ActionItem) => x && x.task)
+      : [];
     const updated = {
       ...m,
-      summary: data.summary,
-      actions: data.action_items.map((x: ActionItem) => x.task),
-      actionDetails: data.action_items,
-      keyPoints: data.key_points,
-      decisions: data.decisions,
-      topics: data.topics,
-      followUp: data.follow_up,
-      openQuestions: data.open_questions,
-      risks: data.risks,
+      summary: String(data.summary || m.summary || ""),
+      actions: items.map((x) => x.task),
+      actionDetails: items,
+      completed: items.map(() => false),
+      keyPoints: list(data.key_points),
+      decisions: list(data.decisions),
+      topics: list(data.topics),
+      followUp: list(data.follow_up),
+      openQuestions: list(data.open_questions),
+      risks: list(data.risks),
     };
     setMeetings((v) =>
       v.map((x) =>
@@ -2887,9 +3205,14 @@ function App() {
       try {
         await chunkWrites.current;
         if (!id) throw new Error("The recording identifier was lost.");
+        const pausedMs =
+          pausedTotal.current +
+          (pausedAt.current ? Date.now() - pausedAt.current : 0);
         const capturedDuration = Math.max(
-          elapsed,
-          Math.round((Date.now() - recordingStartedAt.current) / 1000),
+          1,
+          Math.round(
+            (Date.now() - recordingStartedAt.current - pausedMs) / 1000,
+          ),
         );
         await completeRecording(id, capturedDuration);
         const stored = await getRecording(id);
@@ -2898,23 +3221,42 @@ function App() {
         const audio = URL.createObjectURL(blob);
         const text = live.trim();
         const result = summarize(text);
-        const m: Meeting = {
+        const target = recordingTarget.current
+          ? meetings.find((item) => item.id === recordingTarget.current)
+          : undefined;
+        const startedAt = new Date(stored.startedAt);
+        const base: Meeting = {
           id,
-          title: `Meeting ${new Date().toLocaleDateString()}`,
+          title: `Meeting · ${startedAt.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${startedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`,
           date: stored.startedAt,
           duration: capturedDuration,
           language,
+          status: "complete",
+          transcript: "",
+          summary: "",
+          actions: [],
+        };
+        const m: Meeting = {
+          ...(target || base),
+          date: target ? target.date : stored.startedAt,
+          duration: capturedDuration,
           status: "complete",
           transcript: text || "Processing audio…",
           summary: text
             ? result.summary
             : "Your AI summary will appear after transcription.",
           actions: result.actions,
+          completed: result.actions.map(() => false),
           audio,
           localRecordingId: id,
           recordingBackupStatus: stored.backupStatus,
+          updatedAt: new Date().toISOString(),
         };
-        setMeetings((v) => [m, ...v.filter((item) => item.id !== id)]);
+        recordingTarget.current = null;
+        setMeetings((v) => [
+          m,
+          ...v.filter((item) => item.id !== id && item.id !== m.id),
+        ]);
         setSelected(m.id);
         setMobileView("detail");
         if (session) void uploadRecording(blob, m);
@@ -2956,10 +3298,14 @@ function App() {
       if (mr.state === "recording") {
         mr.pause();
         setPaused(true);
+        pausedAt.current = Date.now();
         clearInterval(timer.current);
       } else if (mr.state === "paused") {
         mr.resume();
         setPaused(false);
+        if (pausedAt.current)
+          pausedTotal.current += Date.now() - pausedAt.current;
+        pausedAt.current = 0;
         timer.current = window.setInterval(
           () => setElapsed((v) => v + 1),
           1000,
@@ -2969,27 +3315,52 @@ function App() {
       setError("Pause or resume is not supported on this browser.");
     }
   }
-  function upload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function upload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    if (file.size > 24 * 1024 * 1024) {
-      setError("Choose an audio file smaller than 24 MB.");
+    if (file.size > 200 * 1024 * 1024) {
+      setError("Choose an audio or video file smaller than 200 MB.");
       return;
     }
+    const id = crypto.randomUUID();
+    let duration = 0;
+    try {
+      duration = await new Promise<number>((resolve) => {
+        const probe = document.createElement("audio");
+        probe.preload = "metadata";
+        probe.onloadedmetadata = () =>
+          resolve(Number.isFinite(probe.duration) ? Math.round(probe.duration) : 0);
+        probe.onerror = () => resolve(0);
+        probe.src = URL.createObjectURL(file);
+        setTimeout(() => resolve(0), 4000);
+      });
+    } catch {}
+    let localRecordingId: string | undefined;
+    try {
+      await beginRecording(id, file.type || "audio/mp4");
+      await appendRecordingChunk(id, 0, file, duration);
+      await completeRecording(id, duration);
+      localRecordingId = id;
+    } catch {
+      /* storage full: still transcribe this session */
+    }
     const m: Meeting = {
-      id: crypto.randomUUID(),
+      id,
       title: file.name.replace(/\.[^.]+$/, ""),
       date: new Date().toISOString(),
-      duration: 0,
+      duration,
+      status: "complete",
       transcript: "Processing audio…",
-      summary: "Creating AI meeting notes…",
+      summary: "Your AI summary will appear after transcription.",
       actions: [],
       audio: URL.createObjectURL(file),
+      localRecordingId,
     };
     setMeetings((v) => [m, ...v]);
     setSelected(m.id);
+    setMobileView("detail");
     void processAudio(file, m);
-    e.target.value = "";
   }
   async function authenticate() {
     try {
@@ -3194,13 +3565,24 @@ function App() {
   }
   async function regenerate() {
     if (!current) return;
+    if (!hasRealTranscript(current.transcript)) {
+      setError(
+        current.localRecordingId
+          ? "There is no transcript yet. Transcribe the recording first."
+          : "Add a transcript first, then generate the summary.",
+      );
+      return;
+    }
     try {
       setError("");
       await analyzeMeeting(current);
+      notify("Summary updated");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Analysis failed");
-      const r = summarize(current.transcript);
-      update(r);
+      const detail = e instanceof Error ? e.message : "Analysis failed";
+      if (!current.summary || !hasRealTranscript(current.summary)) {
+        update(summarize(current.transcript));
+        setError(detail + " A basic local summary was created instead.");
+      } else setError(detail);
     } finally {
       setProcessing("");
     }
@@ -3273,7 +3655,11 @@ function App() {
     if (!current) return;
     const tag = value.trim().replace(/^#/, "");
     if (!tag) return;
-    update({ tags: [...new Set([...(current.tags || []), tag])] });
+    const exists = [...(current.tags || []), ...(current.topics || [])].some(
+      (t) => t.toLowerCase() === tag.toLowerCase(),
+    );
+    if (exists) return;
+    update({ tags: [...(current.tags || []), tag] });
   }
   function backupLibrary() {
     downloadFile(
@@ -3334,7 +3720,7 @@ function App() {
         await navigator.share({ title: current.title, text });
       else {
         await navigator.clipboard.writeText(text);
-        setCloudStatus("Meeting notes copied");
+        notify("Notes copied to share");
       }
     } catch {}
   }
@@ -3343,6 +3729,8 @@ function App() {
     update({ archived: true });
     const next = meetings.find((m) => m.id !== current.id && !m.archived);
     setSelected(next?.id || "welcome");
+    setMobileView("home");
+    notify("Meeting archived");
   }
   function restoreMeeting() {
     if (!current) return;
@@ -3360,6 +3748,8 @@ function App() {
     setSelected(
       next.find((m) => !!m.archived === showArchived)?.id || next[0]?.id || "",
     );
+    setMobileView("home");
+    notify("Meeting deleted");
   }
   function downloadFile(name: string, body: string, type = "text/plain") {
     const url = URL.createObjectURL(new Blob([body], { type }));
@@ -3460,7 +3850,7 @@ function App() {
     await navigator.clipboard.writeText(
       `${current.title}\n\n${current.summary}\n\nAction items:\n${current.actions.map((x) => "• " + x).join("\n")}`,
     );
-    setCloudStatus("Notes copied");
+    notify("Notes copied");
   }
   function printMeeting() {
     window.print();
@@ -3522,8 +3912,123 @@ function App() {
       setProcessing("");
     }
   }
+  const view = current ? transcriptionView(current) : null;
+  const busyTranscribing =
+    !!current &&
+    ["uploading", "queued", "processing", "retrying"].includes(
+      current.transcriptionState || "",
+    );
+  const realTranscript = !!current && hasRealTranscript(current.transcript);
+  const summaryPlaceholder =
+    !current?.summary ||
+    /will appear after transcription|creating ai meeting notes|transcription is in progress|recovered from continuous local checkpoints|recording recovered|no transcript is available yet|could not be transcribed/i.test(
+      current.summary,
+    );
+  const showRecorder = mobileView === "record" || recording;
+  const speakers = current?.transcriptSegments?.length
+    ? [...new Set(current.transcriptSegments.map((s) => s.speaker))]
+    : [];
+  const openTasks = current
+    ? current.actions.filter((_, i) => !current.completed?.[i]).length
+    : 0;
+  function setActionTask(i: number, task: string) {
+    if (!current) return;
+    const actions = [...current.actions];
+    actions[i] = task;
+    const details = current.actions.map((t, n) => ({
+      ...({ task: t, owner: null, due: null, priority: "medium" } as ActionItem),
+      ...(current.actionDetails?.[n] || {}),
+      task: n === i ? task : t,
+    }));
+    update({ actions, actionDetails: details });
+  }
+  function toggleMeetingAction(meetingId: string, index: number) {
+    setMeetings((items) =>
+      items.map((m) => {
+        if (m.id !== meetingId) return m;
+        const completed = [...(m.completed || [])];
+        completed[index] = !completed[index];
+        return { ...m, completed, updatedAt: new Date().toISOString() };
+      }),
+    );
+    notify("Task completed");
+  }
+  function recordPlanned() {
+    setConsent(false);
+    setElapsed(0);
+    setLive("");
+    setError("");
+    setMobileView("record");
+  }
+  function openRecorder() {
+    startMobileMeeting();
+    setShowDashboard(false);
+    setLibraryOpen(false);
+  }
+  const exportMenu = (
+    <details className="menu">
+      <summary className="icon-button" aria-label="Export and more">
+        <MoreHorizontal />
+      </summary>
+      <div
+        className="menu-pop"
+        role="menu"
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest("button"))
+            (e.currentTarget.parentElement as HTMLDetailsElement).open = false;
+        }}
+      >
+        <button onClick={() => void copyNotes()}>
+          <Copy /> Copy notes
+        </button>
+        <button onClick={() => exportMeeting("md")}>
+          <FileText /> Markdown
+        </button>
+        <button onClick={() => exportMeeting("txt")}>
+          <FileText /> Plain text
+        </button>
+        <button onClick={() => exportMeeting("csv")}>
+          <ListChecks /> Action items (CSV)
+        </button>
+        <button onClick={() => exportMeeting("srt")}>
+          <Clock /> Captions (SRT)
+        </button>
+        <button onClick={() => exportMeeting("vtt")}>
+          <Clock /> Captions (VTT)
+        </button>
+        <button onClick={() => exportMeeting("ics")}>
+          <CalendarPlus /> Calendar event
+        </button>
+        <button onClick={() => exportMeeting("json")}>
+          <Download /> JSON backup
+        </button>
+        <button onClick={printMeeting}>
+          <Printer /> Print or PDF
+        </button>
+        <hr />
+        {current?.archived ? (
+          <>
+            <button onClick={restoreMeeting}>
+              <RotateCcw /> Restore meeting
+            </button>
+            <button className="danger" onClick={deleteForever}>
+              <Trash2 /> Delete forever
+            </button>
+          </>
+        ) : current?.status === "planned" ? (
+          <button className="danger" onClick={deleteForever}>
+            <Trash2 /> Delete meeting
+          </button>
+        ) : (
+          <button className="danger" onClick={archiveMeeting}>
+            <Archive /> Archive meeting
+          </button>
+        )}
+      </div>
+    </details>
+  );
   return (
-    <main>
+    <main className={`app view-${showRecorder ? "record" : mobileView}`}>
       {libraryOpen && (
         <button
           className="library-backdrop"
@@ -3531,96 +4036,125 @@ function App() {
           onClick={() => setLibraryOpen(false)}
         />
       )}
-      <aside className={libraryOpen ? "mobile-open" : ""}>
+      <aside className={`sidebar ${libraryOpen ? "mobile-open" : ""}`}>
         <div className="brand">
-          <span className="logo">
-            <img src="/saiddone-mark.png" alt="" />
-          </span>
+          <img src="/saiddone-mark.png" alt="" />
           <div>
             <b>Said and Done</b>
             <small>From conversation to completion</small>
           </div>
-          <button
-            className="sidebar-close"
-            onClick={() => setLibraryOpen(false)}
-            aria-label="Close meeting library"
-          >
-            <X />
-          </button>
         </div>
-        <button
-          className="new-meeting"
-          onClick={() => {
-            newMeeting();
-            setLibraryOpen(false);
-          }}
-        >
-          <Plus /> New meeting
+        <button className="btn btn-record btn-block" onClick={openRecorder} disabled={recording && !showRecorder}>
+          <Mic /> {recording ? "Recording…" : "Record"}
         </button>
-        <div className="sidebar-nav">
+        <div className="sidebar-row">
           <button
-            className={showDashboard ? "active" : ""}
+            className="btn btn-secondary"
             onClick={() => {
-              setShowDashboard((v) => !v);
+              newMeeting();
+              setMobileView("detail");
               setLibraryOpen(false);
             }}
           >
-            <BarChart3 /> Insights
+            <CalendarPlus /> Schedule
           </button>
-          <button
-            className={showArchived ? "active" : ""}
-            onClick={() => {
-              setShowArchived((v) => !v);
-              setFolderFilter("all");
-            }}
-          >
-            <Archive /> {showArchived ? "Active" : "Archive"}
-          </button>
+          <label className="btn btn-secondary">
+            <Upload /> Import
+            <input type="file" accept="audio/*,video/*" onChange={(e) => void upload(e)} />
+          </label>
         </div>
-        <div className="search">
+        <div className="search-field">
           <Search />
           <input
+            type="search"
             aria-label="Search meetings"
-            placeholder="Search your meetings"
+            placeholder="Search meetings"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
-        <label className="folder-filter">
-          <Folder />
-          <select
-            aria-label="Filter by folder"
-            value={folderFilter}
-            onChange={(e) => setFolderFilter(e.target.value)}
+        <div className="sidebar-tabs" role="tablist">
+          <button
+            role="tab"
+            aria-selected={!showArchived && !showDashboard}
+            className={!showArchived && !showDashboard ? "active" : ""}
+            onClick={() => {
+              setShowArchived(false);
+              setShowDashboard(false);
+            }}
           >
-            <option value="all">All folders</option>
-            <option value="Unfiled">Unfiled</option>
-            {folders.map((folder) => (
-              <option key={folder}>{folder}</option>
-            ))}
-          </select>
-        </label>
+            Meetings
+          </button>
+          <button
+            role="tab"
+            aria-selected={showDashboard}
+            className={showDashboard ? "active" : ""}
+            onClick={() => {
+              setShowDashboard(true);
+              setMobileView("detail");
+            }}
+          >
+            Insights
+          </button>
+          <button
+            role="tab"
+            aria-selected={showArchived}
+            className={showArchived ? "active" : ""}
+            onClick={() => {
+              setShowArchived(true);
+              setShowDashboard(false);
+              setFolderFilter("all");
+            }}
+          >
+            Archive
+          </button>
+        </div>
+        {folders.length > 0 && (
+          <label className="folder-filter">
+            <Folder />
+            <select
+              aria-label="Filter by folder"
+              value={folderFilter}
+              onChange={(e) => setFolderFilter(e.target.value)}
+            >
+              <option value="all">All folders</option>
+              <option value="Unfiled">Unfiled</option>
+              {folders.map((folder) => (
+                <option key={folder}>{folder}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="meeting-list">
           {filtered.length ? (
-            filtered.map((m) => (
-              <button
-                className={m.id === selected ? "active" : ""}
-                onClick={() => {
-                  setSelected(m.id);
-                  setShowDashboard(false);
-                  setLibraryOpen(false);
-                }}
-                key={m.id}
-              >
-                <span>{m.title}</span>
-                <small>
-                  {m.status === "planned" ? "Planned · " : ""}
-                  {new Date(m.date).toLocaleDateString()} · {fmt(m.duration)}
-                </small>
-              </button>
-            ))
+            filtered.map((m) => {
+              const v = transcriptionView(m);
+              return (
+                <button
+                  className={m.id === current?.id && !showRecorder && !showDashboard ? "active" : ""}
+                  onClick={() => {
+                    setSelected(m.id);
+                    setShowDashboard(false);
+                    setLibraryOpen(false);
+                    setMobileView("detail");
+                  }}
+                  key={m.id}
+                >
+                  <span className="list-title">
+                    {m.favorite && <Star className="fav" />}
+                    {m.title}
+                  </span>
+                  <small>
+                    {m.status === "planned" && <em className="pill-planned">Planned</em>}
+                    {new Date(m.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                    {m.duration ? ` · ${humanDuration(m.duration)}` : ""}
+                    {v && <i className={`dot dot-${v.tone}`} title={v.label} />}
+                  </small>
+                </button>
+              );
+            })
           ) : (
-            <p className="empty-list">
+            <p className="empty-inline">
               No {showArchived ? "archived " : ""}meetings found.
             </p>
           )}
@@ -3633,12 +4167,12 @@ function App() {
           <span>
             <b>Settings</b>
             <small>
-              {session ? "Cloud sync connected" : "Local workspace"}
+              {session ? session.user.email || "Cloud sync on" : "Stored on this device"}
             </small>
           </span>
         </button>
       </aside>
-      {mobileView === "home" && (
+      {mobileView === "home" && !showRecorder && (
         <MobileHome
           meetings={meetings}
           query={query}
@@ -3649,34 +4183,132 @@ function App() {
           onRecord={startMobileMeeting}
           onSchedule={scheduleMobileMeeting}
           onSettings={() => setSettingsOpen(true)}
+          onImport={(e) => void upload(e)}
+          onToggleAction={toggleMeetingAction}
+          signedIn={!!session}
         />
       )}
-      <section
-        className={`workspace ${mobileView === "home" ? "mobile-editor-hidden" : mobileView === "record" ? "mobile-record-view" : "mobile-detail-view"}`}
-      >
-        <div className="mobile-appbar">
-          <button
-            className="mobile-back"
-            onClick={
-              mobileView === "record"
-                ? leaveMobileRecorder
-                : () => setMobileView("home")
-            }
-          >
-            {mobileView === "record" ? <X /> : <ChevronLeft />}
-            <span>{mobileView === "record" ? "Cancel" : "Conversations"}</span>
-          </button>
-          <button
-            className="icon-button"
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Open settings"
-          >
-            <Settings />
-          </button>
-        </div>
-        <header>
-          <div>
-            {current ? (
+      <section className="workspace">
+        {showRecorder ? (
+          <section className="record-stage">
+            <div className="record-top">
+              {!recording ? (
+                <button className="link-button" onClick={leaveMobileRecorder}>
+                  <ChevronLeft /> Back
+                </button>
+              ) : (
+                <span className="rec-indicator">
+                  <i /> {paused ? "Paused" : "Recording"}
+                </span>
+              )}
+            </div>
+            <div className="record-center">
+              {current?.status === "planned" && (
+                <p className="record-for">Recording for “{current.title}”</p>
+              )}
+              <div className={`record-rings ${recording && !paused ? "live" : ""} ${paused ? "paused" : ""}`}>
+                <span className="record-core">
+                  <Mic />
+                </span>
+              </div>
+              <div className="record-timer" aria-live="off">
+                {fmt(elapsed)}
+              </div>
+              <p className="record-state">
+                {!recording
+                  ? "Ready when you are"
+                  : paused
+                    ? "Recording paused"
+                    : "Listening — audio saves every few seconds"}
+              </p>
+            </div>
+            {!recording ? (
+              <div className="record-setup">
+                <label className="consent-card">
+                  <input
+                    type="checkbox"
+                    checked={consent}
+                    onChange={(e) => setConsent(e.target.checked)}
+                  />
+                  <span className="check-ui" aria-hidden="true">
+                    <Check />
+                  </span>
+                  <span>
+                    <b>Everyone agreed to be recorded</b>
+                    <small>Required before you start.</small>
+                  </span>
+                </label>
+                <button
+                  className="btn btn-record btn-xl"
+                  onClick={() => void start()}
+                  disabled={!consent}
+                >
+                  <Mic /> Start recording
+                </button>
+                <label className="btn btn-ghost">
+                  <Upload /> Or import an audio file
+                  <input type="file" accept="audio/*,video/*" onChange={(e) => void upload(e)} />
+                </label>
+              </div>
+            ) : (
+              <div className="record-controls">
+                <button className="btn btn-secondary btn-xl" onClick={pauseRecording}>
+                  {paused ? <Play /> : <Pause />} {paused ? "Resume" : "Pause"}
+                </button>
+                <button className="btn btn-stop btn-xl" onClick={stop}>
+                  <Square /> Stop
+                </button>
+              </div>
+            )}
+            {recording && live && (
+              <div className="live-card">
+                <span className="eyebrow">Live transcript</span>
+                <p>{live}</p>
+              </div>
+            )}
+            <p className="record-tip">
+              {recording
+                ? "Keep this screen open. When you stop, the recording is transcribed and summarized automatically."
+                : "Your audio stays on this device and is saved continuously, so nothing is lost if the app closes."}
+            </p>
+          </section>
+        ) : showDashboard ? (
+          <section className="insights-view">
+            <div className="mobile-appbar">
+              <button className="link-button" onClick={() => { setShowDashboard(false); setMobileView("home"); }}>
+                <ChevronLeft /> Back
+              </button>
+            </div>
+            <h1 className="page-title">Insights</h1>
+            <div className="stat-grid">
+              <div className="stat"><b>{stats.meetings}</b><span>Meetings</span></div>
+              <div className="stat"><b>{stats.minutes.toLocaleString()}</b><span>Minutes recorded</span></div>
+              <div className="stat"><b>{stats.words.toLocaleString()}</b><span>Words transcribed</span></div>
+              <div className="stat"><b>{stats.open}</b><span>Open tasks</span></div>
+              <div className="stat"><b>{stats.done}</b><span>Tasks done</span></div>
+            </div>
+          </section>
+        ) : current ? (
+          <>
+            <div className="mobile-appbar">
+              <button
+                className="link-button"
+                onClick={() => setMobileView("home")}
+              >
+                <ChevronLeft /> Back
+              </button>
+              <div className="appbar-actions">
+                <button
+                  className="icon-button"
+                  aria-label="Share"
+                  onClick={() => void shareMeeting()}
+                >
+                  <Share2 />
+                </button>
+                {exportMenu}
+              </div>
+            </div>
+            <header className="detail-header">
               <div className="title-row">
                 <input
                   className="title-input"
@@ -3686,754 +4318,733 @@ function App() {
                 />
                 <button
                   className={current.favorite ? "star active" : "star"}
-                  aria-label="Favorite meeting"
+                  aria-label={current.favorite ? "Remove from favorites" : "Add to favorites"}
+                  aria-pressed={!!current.favorite}
                   onClick={() => update({ favorite: !current.favorite })}
                 >
                   <Star />
                 </button>
               </div>
-            ) : (
-              <h1>New meeting</h1>
-            )}
-            <p>
-              {current
-                ? new Date(current.date).toLocaleString()
-                : "Start your first recording"}
-            </p>
-          </div>
-          <div className="header-actions">
-            <button className="ghost" onClick={() => void shareMeeting()}>
-              <Share2 /> Share
-            </button>
-            <button className="ghost" onClick={() => void copyNotes()}>
-              <Copy /> Copy
-            </button>
-            <details className="export-menu">
-              <summary>
-                <Download /> Export
-              </summary>
-              <div>
-                <button onClick={() => exportMeeting("txt")}>Text</button>
-                <button onClick={() => exportMeeting("md")}>Markdown</button>
-                <button onClick={() => exportMeeting("json")}>
-                  JSON backup
-                </button>
-                <button onClick={() => exportMeeting("csv")}>
-                  Action items CSV
-                </button>
-                <button onClick={() => exportMeeting("srt")}>
-                  Captions (SRT)
-                </button>
-                <button onClick={() => exportMeeting("vtt")}>
-                  Captions (VTT)
-                </button>
-                <button onClick={() => exportMeeting("ics")}>
-                  <CalendarPlus /> Calendar event
-                </button>
-                <button onClick={printMeeting}>
-                  <Printer /> Print or PDF
-                </button>
-              </div>
-            </details>
-            {current?.archived ? (
-              <>
-                <button className="ghost" onClick={restoreMeeting}>
-                  <RotateCcw /> Restore
-                </button>
-                <button
-                  className="ghost danger"
-                  aria-label="Delete forever"
-                  onClick={deleteForever}
-                >
-                  <Trash2 />
-                </button>
-              </>
-            ) : current?.status === "planned" ? (
-              <button className="ghost danger" onClick={deleteForever}>
-                <Trash2 /> Delete
-              </button>
-            ) : (
-              <button
-                className="ghost danger"
-                aria-label="Archive meeting"
-                onClick={archiveMeeting}
-              >
-                <Archive />
-              </button>
-            )}
-          </div>
-        </header>
-        {showDashboard && (
-          <section className="dashboard">
-            <div>
-              <b>{stats.meetings}</b>
-              <span>Meetings</span>
-            </div>
-            <div>
-              <b>{stats.minutes}</b>
-              <span>Minutes recorded</span>
-            </div>
-            <div>
-              <b>{stats.words.toLocaleString()}</b>
-              <span>Transcript words</span>
-            </div>
-            <div>
-              <b>{stats.open}</b>
-              <span>Open actions</span>
-            </div>
-            <div>
-              <b>{stats.done}</b>
-              <span>Completed actions</span>
-            </div>
-          </section>
-        )}
-        <div className="meeting-controls">
-          <label>
-            Meeting type
-            <select
-              value={current?.meetingType || "general"}
-              onChange={(e) => update({ meetingType: e.target.value })}
-            >
-              <option value="general">General</option>
-              <option value="one-on-one">1:1</option>
-              <option value="project">Project update</option>
-              <option value="client">Client meeting</option>
-              <option value="interview">Interview</option>
-              <option value="brainstorm">Brainstorm</option>
-              <option value="training">Training</option>
-            </select>
-          </label>
-          <label>
-            Language
-            <select
-              value={current?.language || language}
-              onChange={(e) => {
-                setLanguage(e.target.value);
-                if (current) update({ language: e.target.value });
-              }}
-            >
-              <option value="auto">Auto detect</option>
-              <option value="en">English</option>
-              <option value="es">Spanish</option>
-              <option value="fr">French</option>
-              <option value="de">German</option>
-              <option value="pt">Portuguese</option>
-              <option value="it">Italian</option>
-              <option value="ja">Japanese</option>
-              <option value="ko">Korean</option>
-              <option value="zh">Chinese</option>
-            </select>
-          </label>
-          <label>
-            Status
-            <select
-              value={current?.status || "complete"}
-              onChange={(e) =>
-                update({ status: e.target.value as "planned" | "complete" })
-              }
-            >
-              <option value="planned">Planned</option>
-              <option value="complete">Complete</option>
-            </select>
-          </label>
-          <span>AI tailors notes to this format.</span>
-        </div>
-        {current && (
-          <details className="meeting-meta" open={current.status === "planned"}>
-            <summary>Meeting details</summary>
-            <div>
-              <label>
-                Date and time
-                <input
-                  type="datetime-local"
-                  value={localDateTime(current.date)}
-                  onChange={(e) =>
-                    update({ date: new Date(e.target.value).toISOString() })
-                  }
-                />
-              </label>
-              <label>
-                Folder
-                <input
-                  value={current.folder || ""}
-                  placeholder="Example: Client meetings"
-                  list="meeting-folders"
-                  onChange={(e) => update({ folder: e.target.value })}
-                />
-                <datalist id="meeting-folders">
-                  {folders.map((folder) => (
-                    <option key={folder} value={folder} />
-                  ))}
-                </datalist>
-              </label>
-              <label className="wide">
-                Attendees
-                <input
-                  value={current.attendees || ""}
-                  placeholder="Names or email addresses"
-                  onChange={(e) => update({ attendees: e.target.value })}
-                />
-              </label>
-              <label className="wide">
-                Agenda
-                <textarea
-                  value={current.agenda || ""}
-                  placeholder="What should this meeting cover?"
-                  onChange={(e) => update({ agenda: e.target.value })}
-                />
-              </label>
-              <label className="wide">
-                Custom vocabulary
-                <textarea
-                  value={current.customVocabulary || ""}
-                  placeholder="Names, acronyms, products, and technical terms (comma separated)"
-                  onChange={(e) =>
-                    update({ customVocabulary: e.target.value.slice(0, 1000) })
-                  }
-                />
-                <small>
-                  Used as a spelling hint for the next transcription.
-                </small>
-              </label>
-              <label className="wide">
-                Private notes
-                <textarea
-                  value={current.notes || ""}
-                  placeholder="Add context or personal notes"
-                  onChange={(e) => update({ notes: e.target.value })}
-                />
-              </label>
-            </div>
-          </details>
-        )}
-        <label className="consent">
-          <input
-            type="checkbox"
-            checked={consent}
-            onChange={(e) => setConsent(e.target.checked)}
-          />
-          <span>I confirmed that participants agreed to this recording.</span>
-        </label>
-        <div className="recorder">
-          <div className={`pulse ${recording ? "on" : ""}`}>
-            <Mic />
-          </div>
-          <div>
-            <b>{recording ? "Listening…" : "Ready to record"}</b>
-            <span>
-              {recording ? fmt(elapsed) : "Capture audio and live transcript"}
-            </span>
-          </div>
-          {recording ? (
-            <>
-              <button className="pause" onClick={pauseRecording}>
-                {paused ? <Play /> : <Pause />} {paused ? "Resume" : "Pause"}
-              </button>
-              <button className="stop" onClick={stop}>
-                <Square /> Stop
-              </button>
-            </>
-          ) : (
-            <button className="record" onClick={start} disabled={!consent}>
-              <Mic /> Record
-            </button>
-          )}
-          <label className="upload">
-            <Upload /> Import
-            <input type="file" accept="audio/*,video/*" onChange={upload} />
-          </label>
-        </div>
-        {recording && (
-          <>
-            <div className="mobile-record-controls">
-              <button onClick={pauseRecording}>
-                {paused ? <Play /> : <Pause />} {paused ? "Resume" : "Pause"}
-              </button>
-              <button className="mobile-stop" onClick={stop}>
-                <Square /> Stop recording · {fmt(elapsed)}
-              </button>
-            </div>
-            <div className="live">
-              <span>
-                {paused
-                  ? "RECORDING PAUSED"
-                  : /iPhone|iPad|iPod/i.test(navigator.userAgent)
-                    ? "RECORDING AUDIO"
-                    : "LIVE TRANSCRIPT"}
-              </span>
-              <p>
-                {live ||
-                  (/iPhone|iPad|iPod/i.test(navigator.userAgent)
-                    ? "Recording safely. Add or paste the transcript when you finish."
-                    : "Start speaking. Your transcript will appear here.")}
-              </p>
-            </div>
-          </>
-        )}
-        {processing && <div className="status ai-status">{processing}</div>}
-        {error && (
-          <div className="status error-status">
-            {error}
-            <button onClick={() => setError("")}>Dismiss</button>
-          </div>
-        )}
-        {current && (
-          <>
-            <div className="grid">
-              <article>
-                <div className="section-title">
-                  <FileText />
-                  <h2>Summary</h2>
-                  <button onClick={regenerate}>Generate summary</button>
-                </div>
-                <textarea
-                  aria-label="Meeting summary"
-                  value={current.summary}
-                  onChange={(e) => update({ summary: e.target.value })}
-                />
-              </article>
-              <article>
-                <div className="section-title">
-                  <ListChecks />
-                  <h2>Action items</h2>
-                  <button onClick={addAction}>
-                    <Plus /> Add
-                  </button>
-                </div>
-                <div className="actions">
-                  {current.actions.length ? (
-                    current.actions.map((a, i) => (
-                      <div
-                        className={
-                          current.completed?.[i]
-                            ? "action-card done"
-                            : "action-card"
-                        }
-                        key={i}
-                      >
-                        <input
-                          aria-label={"Complete " + a}
-                          type="checkbox"
-                          checked={!!current.completed?.[i]}
-                          onChange={() => toggleAction(i)}
-                        />
-                        <div>
-                          <span
-                            className="action-task"
-                            contentEditable
-                            suppressContentEditableWarning
-                            onBlur={(e) => {
-                              const task = e.currentTarget.textContent || "";
-                              const n = [...current.actions];
-                              n[i] = task;
-                              update({ actions: n });
-                              updateActionDetail(i, { task });
-                            }}
-                          >
-                            {a}
-                          </span>
-                          <div className="action-fields">
-                            <input
-                              aria-label="Action owner"
-                              value={current.actionDetails?.[i]?.owner || ""}
-                              placeholder="Owner"
-                              onChange={(e) =>
-                                updateActionDetail(i, {
-                                  owner: e.target.value || null,
-                                })
-                              }
-                            />
-                            <input
-                              aria-label="Action due date"
-                              type="date"
-                              value={current.actionDetails?.[i]?.due || ""}
-                              onChange={(e) =>
-                                updateActionDetail(i, {
-                                  due: e.target.value || null,
-                                })
-                              }
-                            />
-                            <select
-                              aria-label="Action priority"
-                              value={
-                                current.actionDetails?.[i]?.priority || "medium"
-                              }
-                              onChange={(e) =>
-                                updateActionDetail(i, {
-                                  priority: e.target.value as
-                                    "low" | "medium" | "high",
-                                })
-                              }
-                            >
-                              <option value="low">Low</option>
-                              <option value="medium">Medium</option>
-                              <option value="high">High</option>
-                            </select>
-                          </div>
-                        </div>
-                        <button
-                          className="remove-action"
-                          aria-label="Remove action item"
-                          onClick={() => removeAction(i)}
-                        >
-                          <X />
-                        </button>
-                      </div>
-                    ))
-                  ) : (
-                    <span>No supported action items were identified.</span>
-                  )}
-                </div>
-              </article>
-            </div>
-            <article className="organize">
-              <div className="section-title">
-                <Tag />
-                <h2>Topics and tags</h2>
-              </div>
-              <div className="tag-list">
-                {[...(current.topics || []), ...(current.tags || [])]
-                  .filter((x, i, a) => a.indexOf(x) === i)
-                  .map((x, i) => (
-                    <span key={i}>
-                      #{x}
-                      {current.tags?.includes(x) && (
-                        <button
-                          aria-label={"Remove " + x}
-                          onClick={() =>
-                            update({
-                              tags: current.tags?.filter((t) => t !== x),
-                            })
-                          }
-                        >
-                          <X />
-                        </button>
-                      )}
-                    </span>
-                  ))}
-              </div>
-              <form
-                className="tag-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const input = e.currentTarget.elements.namedItem(
-                    "tag",
-                  ) as HTMLInputElement;
-                  addTag(input.value);
-                  input.value = "";
-                }}
-              >
-                <input name="tag" placeholder="Add a tag" />
-                <button>Add tag</button>
-              </form>
-            </article>
-            {current.audio && (
-              <div className="player">
-                <button
-                  onClick={() => {
-                    const el = audioPlayer.current;
-                    if (!el) return;
-                    playing ? el.pause() : el.play();
-                    setPlaying(!playing);
-                  }}
-                >
-                  {playing ? <Pause /> : <Play />}
-                </button>
-                <audio
-                  ref={audioPlayer}
-                  src={current.audio}
-                  onPlay={() => setPlaying(true)}
-                  onPause={() => setPlaying(false)}
-                  onEnded={() => setPlaying(false)}
-                  onTimeUpdate={(e) =>
-                    setPlaybackTime(e.currentTarget.currentTime)
-                  }
-                />
-                <div>
-                  <b>Meeting audio</b>
-                  <span>
-                    {current.transcriptionState &&
-                    current.transcriptionState !== "complete"
-                      ? current.transcriptionTotalParts
-                        ? `Transcription ${current.transcriptionState} · ${current.transcriptionCompletedParts || 0}/${current.transcriptionTotalParts} parts saved`
-                        : `Transcription ${current.transcriptionState} · ${Math.round((current.transcriptionProgress || 0) * 100)}%`
-                      : current.recordingBackupStatus === "cloud"
-                      ? "Backed up to the cloud"
-                      : current.recordingBackupStatus === "uploading"
-                        ? "Cloud backup in progress"
-                        : current.recordingBackupStatus === "failed"
-                          ? "Saved locally · cloud backup needs attention"
-                          : "Playback stored on this device"}
-                  </span>
-                  {current.transcriptionError && (
-                    <small>{current.transcriptionError}</small>
-                  )}
-                </div>
-                <span className="playback-time">
-                  {fmt(Math.floor(playbackTime))} / {fmt(current.duration)}
+              <div className="meta-row">
+                <span>
+                  <CalendarDays />
+                  {new Date(current.date).toLocaleDateString(undefined, {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                  })}{" "}
+                  · {timeLabel(current.date)}
                 </span>
-                <label className="playback-speed">
-                  <span>Speed</span>
+                {current.duration > 0 && (
+                  <span>
+                    <Clock3 /> {humanDuration(current.duration)}
+                  </span>
+                )}
+                {current.status === "planned" && <span className="badge badge-busy">Planned</span>}
+                {current.archived && <span className="badge">Archived</span>}
+                <StatusBadge view={view} />
+              </div>
+              <div className="header-actions">
+                <button className="btn btn-secondary btn-sm" onClick={() => void shareMeeting()}>
+                  <Share2 /> Share
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={() => void copyNotes()}>
+                  <Copy /> Copy
+                </button>
+                {exportMenu}
+              </div>
+            </header>
+            {current.status === "planned" && !current.localRecordingId && (
+              <section className="card prep-card">
+                <div className="card-head">
+                  <CalendarDays />
+                  <h2>Prepare</h2>
+                </div>
+                <div className="field-grid">
+                  <label className="field">
+                    <span>Date and time</span>
+                    <input
+                      type="datetime-local"
+                      value={localDateTime(current.date)}
+                      onChange={(e) =>
+                        e.target.value &&
+                        update({ date: new Date(e.target.value).toISOString() })
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Attendees</span>
+                    <input
+                      value={current.attendees || ""}
+                      placeholder="Names or emails"
+                      onChange={(e) => update({ attendees: e.target.value })}
+                    />
+                  </label>
+                  <label className="field wide">
+                    <span>Agenda</span>
+                    <AutoTextarea
+                      value={current.agenda || ""}
+                      placeholder="What should this meeting cover?"
+                      onChange={(value) => update({ agenda: value })}
+                    />
+                  </label>
+                </div>
+                <button className="btn btn-record btn-block" onClick={recordPlanned} disabled={recording}>
+                  <Mic /> Record this meeting
+                </button>
+              </section>
+            )}
+            {(current.audio || current.localRecordingId) && (
+              <section className={`card audio-card ${view?.tone === "warn" ? "needs-attention" : ""}`}>
+                <div className="audio-row">
+                  <button
+                    className="play-button"
+                    disabled={!current.audio}
+                    aria-label={playing ? "Pause recording" : "Play recording"}
+                    onClick={() => {
+                      const el = audioPlayer.current;
+                      if (!el) return;
+                      if (playing) el.pause();
+                      else void el.play();
+                    }}
+                  >
+                    {playing ? <Pause /> : <Play />}
+                  </button>
+                  <audio
+                    ref={audioPlayer}
+                    src={current.audio}
+                    preload="metadata"
+                    onPlay={(e) => {
+                      e.currentTarget.playbackRate = playbackRate;
+                      setPlaying(true);
+                    }}
+                    onPause={() => setPlaying(false)}
+                    onEnded={() => setPlaying(false)}
+                    onTimeUpdate={(e) => setPlaybackTime(e.currentTarget.currentTime)}
+                  />
+                  <div className="audio-info">
+                    <b>Recording</b>
+                    <span>
+                      {view
+                        ? view.label +
+                          (current.transcriptionTotalParts && view.tone !== "ok"
+                            ? ` · ${current.transcriptionCompletedParts || 0} of ${current.transcriptionTotalParts} parts`
+                            : "")
+                        : current.recordingBackupStatus === "cloud"
+                          ? "Backed up to the cloud"
+                          : current.recordingBackupStatus === "uploading"
+                            ? "Backing up…"
+                            : current.recordingBackupStatus === "failed"
+                              ? "Saved on this device · cloud backup failed"
+                              : "Saved on this device"}
+                    </span>
+                  </div>
                   <select
+                    className="speed"
                     aria-label="Playback speed"
                     value={playbackRate}
                     onChange={(e) => {
                       const rate = Number(e.target.value);
                       setPlaybackRate(rate);
-                      if (audioPlayer.current)
-                        audioPlayer.current.playbackRate = rate;
+                      if (audioPlayer.current) audioPlayer.current.playbackRate = rate;
                     }}
                   >
-                    {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
+                    {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
                       <option key={rate} value={rate}>
                         {rate}×
                       </option>
                     ))}
                   </select>
-                </label>
+                </div>
+                <div className="scrub">
+                  <input
+                    type="range"
+                    aria-label="Seek"
+                    min={0}
+                    max={Math.max(1, current.duration)}
+                    step={1}
+                    value={Math.min(playbackTime, Math.max(1, current.duration))}
+                    style={{ ["--pct" as any]: `${(Math.min(playbackTime, current.duration || 1) / Math.max(1, current.duration)) * 100}%` }}
+                    onChange={(e) => {
+                      const t = Number(e.target.value);
+                      setPlaybackTime(t);
+                      if (audioPlayer.current) audioPlayer.current.currentTime = t;
+                    }}
+                  />
+                  <span>
+                    {fmt(playbackTime)} <i>/</i> {fmt(current.duration)}
+                  </span>
+                </div>
+                {view?.tone === "busy" && (
+                  <div className="progress" aria-hidden="true">
+                    <i style={{ width: `${Math.max(4, Math.round((view.progress || 0) * 100))}%` }} />
+                  </div>
+                )}
+                {current.transcriptionError && (
+                  <p className="audio-error">
+                    <CircleAlert /> {current.transcriptionError}
+                  </p>
+                )}
                 {current.localRecordingId && (
                   <button
-                    className="transcribe-button"
+                    className={`btn btn-block ${view?.tone === "warn" ? "btn-primary" : "btn-secondary"}`}
                     onClick={retryTranscription}
-                    disabled={
-                      !!processing ||
-                      ["uploading", "queued", "processing", "retrying"].includes(
-                        current.transcriptionState || "",
-                      )
-                    }
+                    disabled={!!processing || busyTranscribing}
                   >
-                    {current.transcriptionState === "failed" ||
-                    current.transcriptionState === "canceled"
-                      ? "Retry transcription"
-                      : current.transcriptionState === "partial"
-                        ? "Resume transcription"
-                      : "Transcribe recording"}
+                    {busyTranscribing || processing.startsWith("Preparing") || processing.startsWith("Transcribing") || processing.startsWith("Resuming") || processing.startsWith("Uploading") ? (
+                      <>
+                        <Loader2 className="spin" /> Transcribing…
+                      </>
+                    ) : current.transcriptionState === "partial" ? (
+                      <>
+                        <Play /> Resume transcription
+                      </>
+                    ) : realTranscript ? (
+                      <>
+                        <RotateCcw /> Transcribe again
+                      </>
+                    ) : current.transcriptionState === "failed" ? (
+                      <>
+                        <RotateCcw /> Retry transcription
+                      </>
+                    ) : (
+                      <>
+                        <AudioLines /> Transcribe recording
+                      </>
+                    )}
                   </button>
                 )}
-              </div>
+              </section>
             )}
-            {(current.keyPoints?.length || current.decisions?.length) && (
-              <div className="grid insights">
-                <article>
-                  <div className="section-title">
-                    <FileText />
-                    <h2>Key points</h2>
+            <div className="detail-grid">
+              <div className="detail-main">
+                <section className="card o-1">
+                  <div className="card-head">
+                    <Sparkles />
+                    <h2>Summary</h2>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => void regenerate()}
+                      disabled={!!processing || !realTranscript}
+                      title={realTranscript ? "Generate with AI" : "Transcribe first"}
+                    >
+                      {summaryPlaceholder ? "Generate" : "Regenerate"}
+                    </button>
                   </div>
-                  <ul>
-                    {current.keyPoints?.map((x, i) => (
-                      <li key={i}>{x}</li>
-                    ))}
-                  </ul>
-                </article>
-                <article>
-                  <div className="section-title">
-                    <ListChecks />
-                    <h2>Decisions</h2>
-                  </div>
-                  {current.decisions?.length ? (
-                    <ul>
-                      {current.decisions.map((x, i) => (
-                        <li key={i}>{x}</li>
-                      ))}
-                    </ul>
+                  {summaryPlaceholder && !realTranscript ? (
+                    <p className="empty-text">
+                      {busyTranscribing
+                        ? "Your summary will appear once transcription finishes."
+                        : current.localRecordingId
+                          ? "Transcribe the recording to get a summary, key points, and action items."
+                          : current.status === "planned"
+                            ? "Record this meeting to get a summary."
+                            : "Add a transcript below, then generate a summary."}
+                    </p>
                   ) : (
-                    <p>No explicit decisions identified.</p>
+                    <AutoTextarea
+                      className="prose-input"
+                      ariaLabel="Meeting summary"
+                      value={summaryPlaceholder ? "" : current.summary}
+                      placeholder="Write or generate a summary"
+                      onChange={(value) => update({ summary: value })}
+                    />
                   )}
-                </article>
-              </div>
-            )}
-            {(current.openQuestions?.length ||
-              current.risks?.length ||
-              current.followUp?.length) && (
-              <div className="intelligence-grid">
-                <article>
-                  <div className="section-title">
-                    <Search />
-                    <h2>Open questions</h2>
-                  </div>
-                  {current.openQuestions?.length ? (
-                    <ul>
-                      {current.openQuestions.map((x, i) => (
-                        <li key={i}>{x}</li>
+                </section>
+                {((current.keyPoints?.length || 0) > 0 || (current.decisions?.length || 0) > 0) && (
+                  <section className="card o-3">
+                    {(current.keyPoints?.length || 0) > 0 && (
+                      <>
+                        <div className="card-head">
+                          <FileText />
+                          <h2>Key points</h2>
+                        </div>
+                        <ul className="bullets">
+                          {current.keyPoints!.map((x, i) => (
+                            <li key={i}>{x}</li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                    {(current.decisions?.length || 0) > 0 && (
+                      <>
+                        <div className="card-head">
+                          <CheckCircle2 />
+                          <h2>Decisions</h2>
+                        </div>
+                        <ul className="bullets decisions">
+                          {current.decisions!.map((x, i) => (
+                            <li key={i}>{x}</li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </section>
+                )}
+                {((current.openQuestions?.length || 0) > 0 ||
+                  (current.risks?.length || 0) > 0 ||
+                  (current.followUp?.length || 0) > 0) && (
+                  <section className="card o-4">
+                    {(
+                      [
+                        [current.openQuestions, "Open questions", Search],
+                        [current.risks, "Risks", ShieldCheck],
+                        [current.followUp, "For next time", Clock],
+                      ] as const
+                    )
+                      .filter(([list]) => (list?.length || 0) > 0)
+                      .map(([list, title, Icon]) => (
+                        <div key={title}>
+                          <div className="card-head">
+                            <Icon />
+                            <h2>{title}</h2>
+                          </div>
+                          <ul className="bullets">
+                            {list!.map((x, i) => (
+                              <li key={i}>{x}</li>
+                            ))}
+                          </ul>
+                        </div>
                       ))}
-                    </ul>
-                  ) : (
-                    <p>None identified.</p>
-                  )}
-                </article>
-                <article>
-                  <div className="section-title">
-                    <ShieldCheck />
-                    <h2>Risks</h2>
-                  </div>
-                  {current.risks?.length ? (
-                    <ul>
-                      {current.risks.map((x, i) => (
-                        <li key={i}>{x}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>None identified.</p>
-                  )}
-                </article>
-                <article>
-                  <div className="section-title">
-                    <Clock />
-                    <h2>Next meeting</h2>
-                  </div>
-                  {current.followUp?.length ? (
-                    <ul>
-                      {current.followUp.map((x, i) => (
-                        <li key={i}>{x}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>No follow-up agenda needed.</p>
-                  )}
-                </article>
-              </div>
-            )}
-            <article className="followup-email">
-              <div className="section-title">
-                <Mail />
-                <h2>Follow-up email</h2>
-                <button
-                  onClick={() => void draftFollowup()}
-                  disabled={!current.summary || !!processing}
-                >
-                  {current.followupEmail ? "Regenerate" : "Draft email"}
-                </button>
-              </div>
-              {current.followupEmail ? (
-                <>
-                  <textarea
-                    aria-label="Follow-up email draft"
-                    value={current.followupEmail}
-                    onChange={(e) => update({ followupEmail: e.target.value })}
-                  />
-                  <button
-                    className="copy-email"
-                    onClick={() =>
-                      navigator.clipboard.writeText(current.followupEmail || "")
-                    }
-                  >
-                    <Copy /> Copy email
-                  </button>
-                </>
-              ) : (
-                <p>
-                  Turn the summary, decisions, and action items into a
-                  ready-to-send recap.
-                </p>
-              )}
-            </article>
-            <article className="ask">
-              <div className="section-title">
-                <Search />
-                <h2>Ask this meeting</h2>
-              </div>
-              <div className="ask-row">
-                <input
-                  placeholder="What was decided? Who owns the follow-up?"
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void ask();
-                  }}
-                />
-                <button
-                  onClick={() => void ask()}
-                  disabled={!question.trim() || !!processing}
-                >
-                  Ask
-                </button>
-              </div>
-              {answer && <p className="answer">{answer}</p>}
-            </article>
-            <article className="transcript">
-              <div className="section-title">
-                <Clock />
-                <h2>Transcript</h2>
-                <span>
-                  {current.transcript.split(/\s+/).filter(Boolean).length} words
-                </span>
-              </div>
-              {current.transcriptSegments?.length ? (
-                <details className="speaker-transcript" open>
-                  <summary>
-                    Speaker timeline ·{" "}
-                    {
-                      new Set(current.transcriptSegments.map((s) => s.speaker))
-                        .size
-                    }{" "}
-                    speakers
-                  </summary>
-                  <div className="speaker-names">
-                    {[
-                      ...new Set(
-                        current.transcriptSegments.map((s) => s.speaker),
-                      ),
-                    ].map((speaker) => (
-                      <label key={speaker}>
-                        <span>{speaker.replace(/_/g, " ")}</span>
-                        <input
-                          aria-label={"Rename " + speaker}
-                          value={current.speakerNames?.[speaker] || ""}
-                          placeholder={"Name " + speaker.replace(/_/g, " ")}
-                          onChange={(e) =>
-                            renameSpeaker(speaker, e.target.value)
-                          }
-                        />
-                      </label>
-                    ))}
-                  </div>
-                  <div className="speaker-segments">
-                    {current.transcriptSegments.map((segment, i) => (
+                  </section>
+                )}
+                {realTranscript && (
+                  <section className="card o-5">
+                    <div className="card-head">
+                      <MessageSquareText />
+                      <h2>Ask this meeting</h2>
+                    </div>
+                    <form
+                      className="ask-row"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void ask();
+                      }}
+                    >
+                      <input
+                        placeholder="What was decided? Who owns what?"
+                        value={question}
+                        onChange={(e) => setQuestion(e.target.value)}
+                      />
                       <button
-                        type="button"
-                        className={`speaker-segment ${playbackTime >= segment.start && playbackTime < segment.end ? "active" : ""}`}
-                        key={i}
-                        disabled={!current.audio}
-                        title={
-                          current.audio
-                            ? `Play from ${fmt(Math.round(segment.start))}`
-                            : "Audio is not available on this device"
-                        }
-                        onClick={() => {
-                          const player = audioPlayer.current;
-                          if (!player) return;
-                          player.currentTime = segment.start;
-                          player.playbackRate = playbackRate;
-                          void player.play();
+                        className="btn btn-primary"
+                        disabled={!question.trim() || !!processing}
+                      >
+                        Ask
+                      </button>
+                    </form>
+                    {answer && <p className="answer">{answer}</p>}
+                  </section>
+                )}
+                <section className="card transcript-card o-6">
+                  <div className="card-head">
+                    <AudioLines />
+                    <h2>Transcript</h2>
+                    {realTranscript && (
+                      <span className="muted-note">
+                        {current.transcript.split(/\s+/).filter(Boolean).length.toLocaleString()} words
+                      </span>
+                    )}
+                  </div>
+                  {speakers.length > 0 && (
+                    <>
+                      <details className="speaker-names">
+                        <summary>
+                          <Users /> Name the {speakers.length} speaker{speakers.length === 1 ? "" : "s"}
+                        </summary>
+                        <div className="field-grid">
+                          {speakers.map((speaker) => (
+                            <label className="field" key={speaker}>
+                              <span>{speaker.replace(/_/g, " ")}</span>
+                              <input
+                                aria-label={"Rename " + speaker}
+                                value={current.speakerNames?.[speaker] || ""}
+                                placeholder="Name"
+                                onChange={(e) => renameSpeaker(speaker, e.target.value)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </details>
+                      <div className="segments">
+                        {current.transcriptSegments!.map((segment, i) => {
+                          const idx = speakers.indexOf(segment.speaker) % 6;
+                          return (
+                            <button
+                              type="button"
+                              className={`segment spk-${idx} ${playbackTime >= segment.start && playbackTime < segment.end ? "active" : ""}`}
+                              key={i}
+                              disabled={!current.audio}
+                              title={current.audio ? `Play from ${fmt(Math.round(segment.start))}` : undefined}
+                              onClick={() => {
+                                const player = audioPlayer.current;
+                                if (!player) return;
+                                player.currentTime = segment.start;
+                                void player.play();
+                              }}
+                            >
+                              <span className="segment-head">
+                                <b>
+                                  {current.speakerNames?.[segment.speaker]?.trim() ||
+                                    segment.speaker.replace(/_/g, " ")}
+                                </b>
+                                <time>{fmt(Math.round(segment.start))}</time>
+                              </span>
+                              <p>{segment.text}</p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                  <details className="raw-transcript" open={speakers.length === 0}>
+                    <summary>{speakers.length ? "Edit full transcript" : "Transcript text"}</summary>
+                    <AutoTextarea
+                      className="mono-input"
+                      ariaLabel="Meeting transcript"
+                      value={realTranscript ? current.transcript : ""}
+                      placeholder={
+                        current.localRecordingId
+                          ? "The transcript will appear here after transcription."
+                          : "Paste or type a transcript"
+                      }
+                      onChange={(value) => update({ transcript: value })}
+                    />
+                  </details>
+                </section>
+              </div>
+              <div className="detail-side">
+                <section className="card o-2">
+                  <div className="card-head">
+                    <ListChecks />
+                    <h2>Action items</h2>
+                    {current.actions.length > 0 && (
+                      <span className="muted-note">
+                        {openTasks} open
+                      </span>
+                    )}
+                    <button className="btn btn-ghost btn-sm" onClick={addAction}>
+                      <Plus /> Add
+                    </button>
+                  </div>
+                  {current.actions.length ? (
+                    <div className="action-list">
+                      {current.actions.map((a, i) => {
+                        const d = current.actionDetails?.[i];
+                        const done = !!current.completed?.[i];
+                        return (
+                          <div className={`action-row ${done ? "done" : ""}`} key={i}>
+                            <button
+                              className={`task-check ${done ? "checked" : ""}`}
+                              aria-label={(done ? "Mark not done: " : "Mark done: ") + a}
+                              aria-pressed={done}
+                              onClick={() => toggleAction(i)}
+                            >
+                              {done && <Check />}
+                            </button>
+                            <div className="action-main">
+                              <AutoTextarea
+                                className="action-input"
+                                ariaLabel="Action item"
+                                value={a}
+                                onChange={(value) => setActionTask(i, value.replace(/\n/g, " "))}
+                              />
+                              <div className="action-chips">
+                                <label className="chip-field">
+                                  <Users />
+                                  <input
+                                    aria-label="Owner"
+                                    value={d?.owner || ""}
+                                    placeholder="Owner"
+                                    onChange={(e) => updateActionDetail(i, { owner: e.target.value || null })}
+                                  />
+                                </label>
+                                <label className={`chip-field ${isOverdue(d?.due) && !done ? "overdue" : ""}`}>
+                                  <Clock3 />
+                                  {d?.due && !isIsoDate(d.due) ? (
+                                    <input
+                                      aria-label="Due"
+                                      value={d.due}
+                                      onChange={(e) => updateActionDetail(i, { due: e.target.value || null })}
+                                    />
+                                  ) : (
+                                    <input
+                                      aria-label="Due date"
+                                      type="date"
+                                      value={d?.due || ""}
+                                      onChange={(e) => updateActionDetail(i, { due: e.target.value || null })}
+                                    />
+                                  )}
+                                </label>
+                                <select
+                                  aria-label="Priority"
+                                  className={`chip-select pri-${d?.priority || "medium"}`}
+                                  value={d?.priority || "medium"}
+                                  onChange={(e) =>
+                                    updateActionDetail(i, {
+                                      priority: e.target.value as "low" | "medium" | "high",
+                                    })
+                                  }
+                                >
+                                  <option value="low">Low</option>
+                                  <option value="medium">Medium</option>
+                                  <option value="high">High</option>
+                                </select>
+                              </div>
+                            </div>
+                            <button
+                              className="icon-button subtle"
+                              aria-label="Remove action item"
+                              onClick={() => removeAction(i)}
+                            >
+                              <X />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="empty-text">No action items yet.</p>
+                  )}
+                </section>
+                <section className="card o-8">
+                  <div className="card-head">
+                    <Tag />
+                    <h2>Tags</h2>
+                  </div>
+                  {[...(current.topics || []), ...(current.tags || [])].length > 0 && (
+                    <div className="tag-list">
+                      {[...(current.topics || []), ...(current.tags || [])]
+                        .filter(
+                          (x, i, a) =>
+                            a.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i,
+                        )
+                        .map((x) => (
+                          <span className="tag" key={x}>
+                            #{x}
+                            {current.tags?.includes(x) && (
+                              <button
+                                aria-label={"Remove " + x}
+                                onClick={() =>
+                                  update({ tags: current.tags?.filter((t) => t !== x) })
+                                }
+                              >
+                                <X />
+                              </button>
+                            )}
+                          </span>
+                        ))}
+                    </div>
+                  )}
+                  <form
+                    className="inline-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const input = e.currentTarget.elements.namedItem("tag") as HTMLInputElement;
+                      addTag(input.value);
+                      input.value = "";
+                    }}
+                  >
+                    <input name="tag" placeholder="Add a tag" aria-label="Add a tag" />
+                    <button className="btn btn-secondary btn-sm">Add</button>
+                  </form>
+                </section>
+                {realTranscript && (
+                  <section className="card o-7">
+                    <div className="card-head">
+                      <Mail />
+                      <h2>Follow-up email</h2>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => void draftFollowup()}
+                        disabled={summaryPlaceholder || !!processing}
+                      >
+                        {current.followupEmail ? "Redraft" : "Draft"}
+                      </button>
+                    </div>
+                    {current.followupEmail ? (
+                      <>
+                        <AutoTextarea
+                          className="prose-input"
+                          ariaLabel="Follow-up email draft"
+                          value={current.followupEmail}
+                          onChange={(value) => update({ followupEmail: value })}
+                        />
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() =>
+                            void navigator.clipboard
+                              .writeText(current.followupEmail || "")
+                              .then(() => notify("Email copied"))
+                          }
+                        >
+                          <Copy /> Copy email
+                        </button>
+                      </>
+                    ) : (
+                      <p className="empty-text">
+                        Turn the summary, decisions, and action items into a ready-to-send recap.
+                      </p>
+                    )}
+                  </section>
+                )}
+                <details className="card details-card o-9" open={current.status === "planned" && !!current.localRecordingId}>
+                  <summary className="card-head">
+                    <Info />
+                    <h2>Details</h2>
+                    <ChevronDown className="disclose" />
+                  </summary>
+                  <div className="field-grid">
+                    <label className="field">
+                      <span>Meeting type</span>
+                      <select
+                        value={current.meetingType || "general"}
+                        onChange={(e) => update({ meetingType: e.target.value })}
+                      >
+                        <option value="general">General</option>
+                        <option value="one-on-one">1:1</option>
+                        <option value="project">Project update</option>
+                        <option value="client">Client meeting</option>
+                        <option value="interview">Interview</option>
+                        <option value="brainstorm">Brainstorm</option>
+                        <option value="training">Training</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Language</span>
+                      <select
+                        value={current.language || language}
+                        onChange={(e) => {
+                          setLanguage(e.target.value);
+                          update({ language: e.target.value });
                         }}
                       >
-                        <b>
-                          {current.speakerNames?.[segment.speaker]?.trim() ||
-                            segment.speaker.replace(/_/g, " ")}
-                        </b>
-                        <time>{fmt(Math.round(segment.start))}</time>
-                        <p>{segment.text}</p>
-                      </button>
-                    ))}
+                        <option value="auto">Auto detect</option>
+                        <option value="en">English</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="de">German</option>
+                        <option value="pt">Portuguese</option>
+                        <option value="it">Italian</option>
+                        <option value="ja">Japanese</option>
+                        <option value="ko">Korean</option>
+                        <option value="zh">Chinese</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Status</span>
+                      <select
+                        value={current.status || "complete"}
+                        onChange={(e) => update({ status: e.target.value as "planned" | "complete" })}
+                      >
+                        <option value="planned">Planned</option>
+                        <option value="complete">Complete</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Folder</span>
+                      <input
+                        value={current.folder || ""}
+                        placeholder="e.g. Clients"
+                        list="meeting-folders"
+                        onChange={(e) => update({ folder: e.target.value })}
+                      />
+                      <datalist id="meeting-folders">
+                        {folders.map((folder) => (
+                          <option key={folder} value={folder} />
+                        ))}
+                      </datalist>
+                    </label>
+                    {!(current.status === "planned" && !current.localRecordingId) && (
+                      <>
+                        <label className="field wide">
+                          <span>Date and time</span>
+                          <input
+                            type="datetime-local"
+                            value={localDateTime(current.date)}
+                            onChange={(e) =>
+                              e.target.value &&
+                              update({ date: new Date(e.target.value).toISOString() })
+                            }
+                          />
+                        </label>
+                        <label className="field wide">
+                          <span>Attendees</span>
+                          <input
+                            value={current.attendees || ""}
+                            placeholder="Names or emails"
+                            onChange={(e) => update({ attendees: e.target.value })}
+                          />
+                        </label>
+                        <label className="field wide">
+                          <span>Agenda</span>
+                          <AutoTextarea
+                            value={current.agenda || ""}
+                            placeholder="What this meeting covered"
+                            onChange={(value) => update({ agenda: value })}
+                          />
+                        </label>
+                      </>
+                    )}
+                    <label className="field wide">
+                      <span>Custom vocabulary</span>
+                      <AutoTextarea
+                        value={current.customVocabulary || ""}
+                        placeholder="Names, acronyms, product terms — comma separated"
+                        onChange={(value) => update({ customVocabulary: value.slice(0, 1000) })}
+                      />
+                      <small>Helps spell names correctly in the next transcription.</small>
+                    </label>
+                    <label className="field wide">
+                      <span>Private notes</span>
+                      <AutoTextarea
+                        value={current.notes || ""}
+                        placeholder="Only you see these"
+                        onChange={(value) => update({ notes: value })}
+                      />
+                    </label>
                   </div>
                 </details>
-              ) : null}
-              <label className="editable-transcript">
-                <span>
-                  {current.transcriptSegments?.length
-                    ? "Editable transcript"
-                    : "Meeting transcript"}
-                </span>
-                <textarea
-                  aria-label="Meeting transcript"
-                  value={current.transcript}
-                  onChange={(e) => update({ transcript: e.target.value })}
-                />
-              </label>
-            </article>
+              </div>
+            </div>
+            <footer className="credit">Created by Nikki</footer>
           </>
+        ) : (
+          <div className="home-empty">
+            <span className="empty-icon">
+              <AudioLines />
+            </span>
+            <h2>No meeting selected</h2>
+            <p>Record, import, or schedule a meeting to get started.</p>
+            <button className="btn btn-record" onClick={openRecorder}>
+              <Mic /> Start recording
+            </button>
+          </div>
         )}
       </section>
+      <div className="status-dock" aria-live="polite">
+        {processing && (
+          <div className="dock-item dock-busy">
+            <Loader2 className="spin" />
+            <span>{processing}</span>
+          </div>
+        )}
+        {error && (
+          <div className="dock-item dock-error" role="alert">
+            <CircleAlert />
+            <span>{error}</span>
+            <button className="icon-button subtle" aria-label="Dismiss" onClick={() => setError("")}>
+              <X />
+            </button>
+          </div>
+        )}
+        {toast && !error && (
+          <div className="dock-item dock-toast">
+            <CheckCircle2 />
+            <span>{toast}</span>
+          </div>
+        )}
+      </div>
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -4473,18 +5084,8 @@ function App() {
         onConnectCalendar={(provider) => void connectCalendar(provider)}
         onDisconnectCalendar={(provider) => void disconnectCalendar(provider)}
         onSyncCalendars={() => void syncCalendars()}
+        calendarHistory={calendarHistory}
       />
-      <footer
-        style={{
-          gridColumn: 2,
-          textAlign: "center",
-          color: "var(--muted)",
-          fontSize: 12,
-          padding: "0 16px 28px",
-        }}
-      >
-        Created by Nikki
-      </footer>
     </main>
   );
 }

@@ -1,48 +1,43 @@
-# Meeting Notes Design Review
+# Said and Done — Design System (v2, November 2026)
 
-## Issues addressed
+## Direction
 
-- Cloud account, data, and installation controls crowded the meeting library.
-- The same navigation pattern was used on phones, tablets, and desktops.
-- The dark teal styling resembled a common AI dashboard and weakened the product identity.
-- Important actions competed visually with secondary utilities.
-- Mobile users could not easily reopen the full meeting library.
+Calm "ink and paper" surfaces, one confident blue for interaction, and coral reserved for
+recording so the most important action is always unmistakable. Meeting titles and page
+headings use an editorial serif (Instrument Serif) for character; everything else uses
+Geist for clarity. Fonts are bundled with the app, so it looks right offline.
 
-## Design decisions
-
-- Moved cloud sync, account access, backup, restore, installation, privacy, and appearance into a dedicated Settings panel.
-- Used a persistent library sidebar on desktop, a narrower working rail on tablet, and bottom navigation plus a library drawer on phone.
-- Adopted a warm neutral palette with one restrained violet accent.
-- Replaced decorative gradients and heavy shadows with calm surfaces, fine borders, and selective depth.
-- Used native system typography, compact hierarchy, 44 pixel minimum controls, visible focus states, and safe-area-aware mobile navigation.
-- Added System, Light, and Dark appearance choices stored per device.
-
-## Core tokens
+## Tokens
 
 | Token | Light | Dark |
 | --- | --- | --- |
-| Background | `#f4f2f8` | `#15131a` |
-| Surface | `#ffffff` | `#211e27` |
-| Text | `#201d27` | `#f5f2f8` |
-| Muted | `#6f6978` | `#aaa3b2` |
-| Accent | `#6650a4` | `#b7a0ff` |
-| Corner radius | 12 to 22 px | 12 to 22 px |
+| Background | `#f5f4f0` | `#0c0e12` |
+| Surface | `#ffffff` | `#15181e` |
+| Text | `#16171b` | `#ecedf0` |
+| Muted | `#676a72` | `#9a9ea8` |
+| Accent (interactive) | `#3463f5` | `#6a8fff` |
+| Record | `#ef4f35` | `#ff6448` |
+| Radius | 10 / 14 / 20 px | same |
 
-## Responsive and accessibility checks
+System, Light and Dark appearance are supported; System follows the device.
 
-- Desktop: persistent library and roomy two-column meeting content.
-- Tablet: compact rail, reduced page gutters, and single-column content where needed.
-- Phone: sticky app bar, library drawer, bottom navigation, full-screen Settings, and recording controls above the safe area.
-- Keyboard: Escape closes Settings and focus returns to the opener.
-- Controls: minimum 44 pixel targets and visible focus rings.
-- Themes: semantic colors support System, Light, and Dark modes.
+## Structure
 
-## Conversation-first mobile revision
+- **Phone:** large serif page title, grouped conversation cards (time, title, two-line summary,
+  status and task badges), an "Up next" card for the next scheduled meeting, and bottom
+  navigation with a raised coral record button. Tasks can be completed straight from the
+  Tasks tab.
+- **Meeting:** title and meta line, then the recording card (playback, scrubber, transcription
+  status and progress, one clear Transcribe action), then Summary → Action items →
+  Key points/Decisions → Ask → Transcript → Follow-up → Tags → Details. On wide screens
+  action items, tags, follow-up and details sit in a right-hand column.
+- **Record:** a dedicated, distraction-free screen on every device: consent check,
+  big timer, animated rings while live, Pause/Stop.
+- **Feedback:** progress, errors and confirmations appear in a floating status dock that is
+  always visible, instead of a banner at the top of a long page.
 
-- Replaced the editor-first mobile landing page with a conversation library.
-- Added top-level Conversations, Calendar, and Action Items views.
-- Grouped conversations by date and reduced each meeting to a readable preview card.
-- Added a prominent center microphone action for immediate recording.
-- Moved meeting fields and analysis tools into a secondary detail screen.
-- Added a focused recording screen that hides unrelated meeting controls.
-- Updated the mobile color system to a calm slate surface with a clear blue action color.
+## Accessibility
+
+44 px touch targets on phone, visible focus rings, `aria-pressed` on toggles,
+`aria-current` on navigation, reduced-motion support, and 16 px inputs on phone to prevent
+iOS zoom.
