@@ -1,43 +1,33 @@
-# Said and Done — Design System (v2, November 2026)
+# Said & Done v3: Otter-style rebuild (November 2026)
 
-## Direction
+## Why the rebuild
+The previous app decoded whole recordings on the phone after you pressed Stop. On iPhone that
+step crashed (memory) or silently read only the first 5 seconds (Safari's fragmented-MP4 bug),
+so meetings never reached a transcript, summary, or chat. The server was fine the whole time.
 
-Calm "ink and paper" surfaces, one confident blue for interaction, and coral reserved for
-recording so the most important action is always unmistakable. Meeting titles and page
-headings use an editorial serif (Instrument Serif) for character; everything else uses
-Geist for clarity. Fonts are bundled with the app, so it looks right offline.
+## How it works now
+- **Live transcription.** The microphone is captured as raw 16 kHz audio and cut at natural pauses
+  into 15–35 s pieces. Each piece is saved to the phone *before* it's sent, then transcribed with
+  speaker labels while you keep talking. Short voice samples of each speaker are sent with later
+  pieces so "Speaker 1" stays Speaker 1.
+- **Nothing gets lost.** The piece in progress is checkpointed every 5 s. If the app is closed,
+  the next launch turns the checkpoint into a piece and finishes. Offline? Pieces queue and send
+  on reconnect, with retries and back-off.
+- **Notes.** When transcription finishes, `/api/notes` writes an Otter-style title, summary,
+  timestamped outline, action items, decisions, and open questions. `/api/chat` answers per meeting
+  or across the whole library, citing timestamps.
+- **Export everything.** One ZIP per meeting (summary, transcript, SRT/VTT captions, highlights,
+  notes, AI chat, Word, PDF, JSON, audio), individual formats, and a whole-library ZIP. On iPhone,
+  the share sheet saves straight to Google Drive or Files.
 
-## Tokens
+## Visual identity: "highlighter on paper"
+Warm paper and ink; one electric highlighter (#E2FF3D) for highlights, active tabs, and titles;
+a red record dot. Funnel Display / Funnel Sans and JetBrains Mono for timestamps, all bundled for
+offline use. Rules and type structure the page instead of stacks of rounded cards. Real waveforms
+appear on every meeting and in the player. In dark mode the highlighter becomes an underline
+wherever text is light.
 
-| Token | Light | Dark |
-| --- | --- | --- |
-| Background | `#f5f4f0` | `#0c0e12` |
-| Surface | `#ffffff` | `#15181e` |
-| Text | `#16171b` | `#ecedf0` |
-| Muted | `#676a72` | `#9a9ea8` |
-| Accent (interactive) | `#3463f5` | `#6a8fff` |
-| Record | `#ef4f35` | `#ff6448` |
-| Radius | 10 / 14 / 20 px | same |
-
-System, Light and Dark appearance are supported; System follows the device.
-
-## Structure
-
-- **Phone:** large serif page title, grouped conversation cards (time, title, two-line summary,
-  status and task badges), an "Up next" card for the next scheduled meeting, and bottom
-  navigation with a raised coral record button. Tasks can be completed straight from the
-  Tasks tab.
-- **Meeting:** title and meta line, then the recording card (playback, scrubber, transcription
-  status and progress, one clear Transcribe action), then Summary → Action items →
-  Key points/Decisions → Ask → Transcript → Follow-up → Tags → Details. On wide screens
-  action items, tags, follow-up and details sit in a right-hand column.
-- **Record:** a dedicated, distraction-free screen on every device: consent check,
-  big timer, animated rings while live, Pause/Stop.
-- **Feedback:** progress, errors and confirmations appear in a floating status dock that is
-  always visible, instead of a banner at the top of a long page.
-
-## Accessibility
-
-44 px touch targets on phone, visible focus rings, `aria-pressed` on toggles,
-`aria-current` on navigation, reduced-motion support, and 16 px inputs on phone to prevent
-iOS zoom.
+## Code map
+`src/lib`: storage (IndexedDB), recorder, transcription queue, importer, migration, AI, export.
+`src/ui`: Home, Record, Meeting (Summary/Transcript/Highlights/Chat/Notes + player), Ask, Settings.
+Server endpoints live in the `meeting-notes` (Vercel) repo; `/api/health?deep=1` runs a live self-test.
