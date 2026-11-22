@@ -27,6 +27,7 @@ import { playbackBlob } from "../lib/export";
 import { processStoredAudio } from "../lib/importer";
 import { transcriber } from "../lib/transcriber";
 import { recorder } from "../lib/recorder";
+import { botLabel, cancelBot, makeBotLeave } from "../lib/bot";
 import type { Meeting, Segment } from "../lib/types";
 import {
   Avatar,
@@ -254,7 +255,48 @@ export function MeetingScreen({ id, tab }: { id: string; tab: Tab }) {
   );
 }
 
+function BotBanner({ m }: { m: Meeting }) {
+  const [busy, setBusy] = useState(false);
+  if (!m.bot) return null;
+  const l = botLabel(m.bot);
+  const act = async (fn: () => Promise<void>, ok: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      toast(ok);
+    } catch (e: any) {
+      toast(e.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className={`banner ${l.tone === "warn" ? "banner-warn" : "banner-busy"}`}>
+      {l.tone !== "warn" && <span className="spinner" />}
+      <span>{l.text}</span>
+      {l.canLeave && (
+        <button className="btn btn-ink btn-sm" disabled={busy} onClick={() => void act(() => makeBotLeave(m), "Notetaker is leaving the call")}>
+          Make it leave
+        </button>
+      )}
+      {l.canCancel && (
+        <button
+          className="btn btn-quiet btn-sm"
+          disabled={busy}
+          onClick={() => confirm("Cancel the notetaker for this call?") && void act(async () => {
+            await cancelBot(m);
+            if (!store.get(m.id)) go("", true);
+          }, "Notetaker cancelled")}
+        >
+          Cancel
+        </button>
+      )}
+    </div>
+  );
+}
+
 function StatusBanner({ m, status, stats }: { m: Meeting; status: string; stats: ReturnType<typeof usePieceStats> }) {
+  if (m.status === "bot") return <BotBanner m={m} />;
   if (m.status === "needs_audio_processing")
     return (
       <div className="banner">

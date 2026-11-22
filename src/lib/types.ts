@@ -37,7 +37,19 @@ export type MeetingStatus =
   | "processing" // transcribing remaining pieces / summarizing
   | "ready"
   | "needs_audio_processing" // imported/migrated audio not yet transcribed
+  | "bot" // a notetaker bot is scheduled, joining, or in the call
   | "error";
+
+export type BotInfo = {
+  id: string;
+  url: string;
+  platform: string;
+  joinAt: string | null;
+  code: string; // Recall status code
+  subCode?: string | null;
+  message?: string | null;
+  sentAt: string;
+};
 
 export type Meeting = {
   id: string;
@@ -59,7 +71,8 @@ export type Meeting = {
   peaks: number[]; // waveform, 10 values per second, 0..1
   hasPcm: boolean; // continuous 16 kHz audio stored (playback + transcription)
   audioFiles: { name: string; type: string; key: string }[]; // original/compressed audio parts
-  source: "recording" | "import" | "migrated";
+  source: "recording" | "import" | "migrated" | "bot";
+  bot?: BotInfo;
   language: string;
   marks?: number[]; // seconds tapped as "highlight this" while recording
 };

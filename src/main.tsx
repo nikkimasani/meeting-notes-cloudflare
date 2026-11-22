@@ -12,6 +12,7 @@ import { requestPersistence } from "./lib/db";
 import { migrateOldData } from "./lib/migrate";
 import { recoverInterruptedRecordings, recorder } from "./lib/recorder";
 import { transcriber } from "./lib/transcriber";
+import { botWatcher } from "./lib/bot";
 import { Toasts, go, toast, useRoute } from "./ui/kit";
 import { Home } from "./ui/Home";
 import { RecordScreen } from "./ui/Record";
@@ -71,6 +72,7 @@ function App() {
         }
         await recoverInterruptedRecordings();
         transcriber.kick();
+        botWatcher.kick();
         void requestPersistence();
       } catch (e: any) {
         toast("Storage could not be opened: " + (e?.message || e), "error");
@@ -78,7 +80,7 @@ function App() {
         setBooted(true);
       }
     })();
-    const onHide = () => document.visibilityState === "hidden" && flushSaves();
+    const onHide = () => (document.visibilityState === "hidden" ? flushSaves() : botWatcher.kick());
     document.addEventListener("visibilitychange", onHide);
     window.addEventListener("pagehide", flushSaves);
     window.addEventListener("online", () => transcriber.kick());

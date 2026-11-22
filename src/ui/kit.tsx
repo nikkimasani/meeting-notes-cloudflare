@@ -3,6 +3,7 @@ import type { Meeting } from "../lib/types";
 import { transcriber, pieceStats } from "../lib/transcriber";
 import { importProgress } from "../lib/importer";
 import { isGeneratingNotes } from "../lib/ai";
+import { botLabel } from "../lib/bot";
 
 // ---------- Routing (hash based so the phone's back gesture works) ----------
 export type Route =
@@ -287,6 +288,7 @@ export function useImportProgress(id: string | undefined) {
 
 export function statusText(m: Meeting, stats: ReturnType<typeof usePieceStats>, importing?: number) {
   if (m.status === "recording") return "Recording";
+  if (m.status === "bot" && m.bot) return botLabel(m.bot).text;
   if (importing !== undefined) return `Reading audio… ${Math.round(importing * 100)}%`;
   if (m.status === "processing")
     return stats && stats.total

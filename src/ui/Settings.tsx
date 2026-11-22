@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, FileArchive, Monitor, Moon, Sun, Video } from "lucide-react";
+import { ChevronLeft, FileArchive, Monitor, Moon, Sun, Bot } from "lucide-react";
+import { botConfigured } from "../lib/bot";
+import { BotSheet } from "./BotSheet";
 import { db } from "../lib/db";
 import { useMeetings } from "../lib/store";
 import { back } from "./kit";
@@ -12,8 +14,11 @@ export function SettingsScreen() {
   const [usage, setUsage] = useState<{ usage?: number; quota?: number } | undefined>();
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [botReady, setBotReady] = useState<boolean | null>(null);
+  const [botOpen, setBotOpen] = useState(false);
   useEffect(() => {
     void db.estimate().then(setUsage);
+    void botConfigured().then(setBotReady);
     void navigator.storage?.persisted?.().then(setPersisted).catch(() => setPersisted(null));
   }, []);
   const pick = (t: string) => {
@@ -93,12 +98,24 @@ export function SettingsScreen() {
       <section className="set">
         <h2 className="kicker">Meeting bot</h2>
         <div className="set-row static">
-          <Video />
+          <Bot />
           <span>
-            <b>Auto-join Zoom, Meet and Teams</b>
-            <small>Coming next. It needs a meeting-bot service account (Recall.ai, roughly $0.50–$1 per meeting hour). Until then, record calls on this device with your speaker on.</small>
+            <b>Notetaker for Teams, Zoom, Meet and Webex</b>
+            <small>
+              {botReady === null
+                ? "Checking…"
+                : botReady
+                  ? "Ready. It only joins a call when you send it — never automatically."
+                  : "Not set up: add your Recall.ai key as RECALL_API_KEY in Vercel → Settings → Environment Variables, then redeploy."}
+            </small>
           </span>
         </div>
+        {botReady && (
+          <button className="btn btn-quiet btn-sm" onClick={() => setBotOpen(true)}>
+            <Bot /> Send notetaker to a call
+          </button>
+        )}
+        <BotSheet open={botOpen} onClose={() => setBotOpen(false)} />
       </section>
 
       <section className="set">

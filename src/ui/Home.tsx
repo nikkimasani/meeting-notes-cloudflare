@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Search, Upload, Star, X, MessageCircle, Sparkles, Mic } from "lucide-react";
+import { Search, Upload, Star, X, MessageCircle, Sparkles, Mic, Bot } from "lucide-react";
+import { BotSheet } from "./BotSheet";
 import { useMeetings } from "../lib/store";
 import { importFile } from "../lib/importer";
 import { speakerName } from "../lib/ai";
@@ -24,6 +25,7 @@ export function Home() {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [filter, setFilter] = useState<"all" | "starred" | "tasks">("all");
+  const [botOpen, setBotOpen] = useState(false);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -72,6 +74,9 @@ export function Home() {
           <span>Said &amp; Done</span>
         </div>
         <div className="home-tools">
+          <button className="icon-btn" aria-label="Send a notetaker to a call" title="Send a notetaker to a call" onClick={() => setBotOpen(true)}>
+            <Bot />
+          </button>
           <button className="icon-btn" aria-label="Search" onClick={() => setSearching((s) => !s)}>
             {searching ? <X /> : <Search />}
           </button>
@@ -82,9 +87,23 @@ export function Home() {
         </div>
       </header>
 
-      <h1 className="page-title">
-        <span className="hl">Meetings</span>
-      </h1>
+      <div className="title-row">
+        <h1 className="page-title">
+          <span className="hl">Meetings</span>
+        </h1>
+        <div className="desk-tools">
+          <button className="btn btn-quiet btn-sm" onClick={() => setBotOpen(true)}>
+            <Bot /> Send notetaker
+          </button>
+          <label className="btn btn-quiet btn-sm">
+            <Upload /> Import
+            <input type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.mov,.webm" onChange={onImport} />
+          </label>
+          <button className="icon-btn" aria-label="Search" onClick={() => setSearching((x) => !x)}>
+            {searching ? <X /> : <Search />}
+          </button>
+        </div>
+      </div>
 
       {(searching || query) && (
         <div className="search">
@@ -155,6 +174,7 @@ export function Home() {
         />
       )}
 
+      <BotSheet open={botOpen} onClose={() => setBotOpen(false)} />
       <button className="fab-record" onClick={() => go("record")} aria-label="Record">
         {rec.state !== "idle" ? <i className="rec-dot" /> : <Mic />}
       </button>

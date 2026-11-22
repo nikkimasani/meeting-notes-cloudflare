@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Highlighter, Pause, Play, Square, WifiOff, Mic } from "lucide-react";
+import { ChevronLeft, Highlighter, Pause, Play, Square, WifiOff, Mic, Bot } from "lucide-react";
+import { BotSheet } from "./BotSheet";
 import { recorder } from "../lib/recorder";
 import { newMeeting, store, useMeeting } from "../lib/store";
 import { speakerName } from "../lib/ai";
@@ -15,6 +16,7 @@ function Setup({ starting, error }: { starting: boolean; error: string }) {
   const [title, setTitle] = useState("");
   const [consent, setConsent] = useState(localStorage.getItem("sd-consent-remember") === "1");
   const [language, setLanguage] = useState(localStorage.getItem("sd-language") || "auto");
+  const [botOpen, setBotOpen] = useState(false);
   const start = async () => {
     localStorage.setItem("sd-language", language);
     const m = newMeeting({ language, ...(title.trim() ? { title: title.trim(), titleIsAuto: false } : {}) });
@@ -74,6 +76,14 @@ function Setup({ starting, error }: { starting: boolean; error: string }) {
           <i className="rec-dot" /> {starting ? "Starting…" : "Start recording"}
         </button>
         <p className="fine">Tip: keep the screen on and the app open while recording. Your phone won't sleep while this screen is up.</p>
+        <button className="bot-entry" onClick={() => setBotOpen(true)}>
+          <Bot />
+          <span>
+            <b>On a Teams, Zoom or Meet call?</b>
+            <small>Send a notetaker to join and record it for you — only when you ask.</small>
+          </span>
+        </button>
+        <BotSheet open={botOpen} onClose={() => setBotOpen(false)} />
       </div>
     </div>
   );

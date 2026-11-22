@@ -1,0 +1,95 @@
+import { useEffect, useState } from "react";
+import { Bot, Loader2 } from "lucide-react";
+import { botConfigured, platformOf, sendBot } from "../lib/bot";
+import { Sheet, go, toast } from "./kit";
+
+export function BotSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [url, setUrl] = useState("");
+  const [title, setTitle] = useState("");
+  const [when, setWhen] = useState<"now" | "later">("now");
+  const [at, setAt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [ready, setReady] = useState<boolean | null>(null);
+  const [consent, setConsent] = useState(false);
+  useEffect(() => {
+    if (open) void botConfigured().then(setReady);
+  }, [open]);
+  const platform = platformOf(url);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const id = await sendBot({ url, title, joinAt: when === "later" && at ? new Date(at).toISOString() : null });
+      toast(when === "later" ? "Notetaker scheduled" : "Notetaker is on its way");
+      setUrl("");
+      setTitle("");
+      onClose();
+      go("m/" + id);
+    } catch (e: any) {
+      toast(e.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Sheet open={open} onClose={() => !busy && onClose()} title="Send a notetaker">
+      <p className="sheet-note">
+        A bot named <b>Said &amp; Done Notetaker</b> joins only this call, records it, and the transcript and notes land here. It never joins anything on its own.
+      </p>
+      {ready === false ? (
+        <div className="banner banner-warn">
+          <span>
+            The notetaker isn't set up yet. Add your Recall.ai key as <b>RECALL_API_KEY</b> in Vercel (Settings → Environment Variables), then redeploy.
+          </span>
+        </div>
+      ) : (
+        <form
+          className="sheet-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+        >
+          <label className="field">
+            <span>Meeting link</span>
+            <input
+              inputMode="url"
+              autoComplete="off"
+              placeholder="https://teams.microsoft.com/l/meetup-join/…"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              aria-label="Meeting link"
+            />
+            {url && <small className={platform ? "ok-note" : "warn-note"}>{platform ? `${platform} link` : "Paste a Teams, Zoom, Google Meet or Webex link"}</small>}
+          </label>
+          <label className="field">
+            <span>Title (optional)</span>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Partner sync" />
+          </label>
+          <div className="seg2" role="group" aria-label="When">
+            <button type="button" className={when === "now" ? "on" : ""} onClick={() => setWhen("now")}>
+              Join now
+            </button>
+            <button type="button" className={when === "later" ? "on" : ""} onClick={() => setWhen("later")}>
+              Schedule
+            </button>
+          </div>
+          {when === "later" && (
+            <label className="field">
+              <span>Join at</span>
+              <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} />
+            </label>
+          )}
+          <label className="check compact">
+            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+            <span className="box" aria-hidden="true" />
+            <span>People in this call will see the notetaker and know it's recording.</span>
+          </label>
+          <button className="btn btn-ink btn-block btn-xl" disabled={busy || !platform || !consent || (when === "later" && !at) || ready === null}>
+            {busy ? <Loader2 className="spin" /> : <Bot />} {when === "later" ? "Schedule notetaker" : "Send notetaker now"}
+          </button>
+          <p className="fine">Costs about $0.50 per hour the bot is in the call or lobby (billed by Recall.ai). In Teams, someone may need to admit it from the lobby.</p>
+        </form>
+      )}
+    </Sheet>
+  );
+}
