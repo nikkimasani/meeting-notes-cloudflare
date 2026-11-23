@@ -100,13 +100,13 @@ export function SettingsScreen() {
         <div className="set-row static">
           <Bot />
           <span>
-            <b>Notetaker for Teams, Zoom, Meet and Webex</b>
+            <b>Notetaker for Teams, Zoom and Meet</b>
             <small>
               {botReady === null
                 ? "Checking…"
                 : botReady
                   ? "Ready. It only joins a call when you send it — never automatically."
-                  : "Not set up: add your Recall.ai key as RECALL_API_KEY in Vercel → Settings → Environment Variables, then redeploy."}
+                  : "Not set up: sign in at vexa.ai with Google, copy your API key, and add it as VEXA_API_KEY in Vercel (meeting-notes → Settings → Environment Variables), then redeploy."}
             </small>
           </span>
         </div>

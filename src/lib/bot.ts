@@ -187,13 +187,14 @@ async function finish(m: Meeting, data: any) {
     // 1. Audio (for playback + export)
     if (data.audioUrl && !m.audioFiles.length) {
       try {
-        const res = await fetch(`/api/recall-audio?u=${encodeURIComponent(data.audioUrl)}`);
+        const res = await fetch(String(data.audioUrl).startsWith("/api/") ? data.audioUrl : `/api/recall-audio?u=${encodeURIComponent(data.audioUrl)}`);
         if (res.ok) {
           const buf = await res.arrayBuffer();
-          const type = res.headers.get("content-type") || "audio/mpeg";
+          const type = (res.headers.get("content-type") || "audio/mpeg").split(";")[0];
           const key = `${m.id}:original`;
           await db.saveAudio(key, buf, type);
-          store.update(m.id, { audioFiles: [{ name: type.includes("mp4") ? "call.mp4" : "call.mp3", type, key }] });
+          const ext = type.includes("mp4") ? "m4a" : type.includes("webm") ? "webm" : type.includes("wav") ? "wav" : type.includes("ogg") ? "ogg" : "mp3";
+          store.update(m.id, { audioFiles: [{ name: `call.${ext}`, type, key }] });
           const peaks: number[] = [];
           let seconds = 0;
           await decodeToPcm(new Blob([buf], { type }), (pcm) => {

@@ -38,7 +38,7 @@ export function BotSheet({ open, onClose }: { open: boolean; onClose: () => void
       {ready === false ? (
         <div className="banner banner-warn">
           <span>
-            The notetaker isn't set up yet. Add your Recall.ai key as <b>RECALL_API_KEY</b> in Vercel (Settings → Environment Variables), then redeploy.
+            The notetaker isn't set up yet. Sign in at vexa.ai with Google, copy your API key, add it as <b>VEXA_API_KEY</b> in Vercel (meeting-notes → Settings → Environment Variables), then redeploy.
           </span>
         </div>
       ) : (
@@ -54,12 +54,12 @@ export function BotSheet({ open, onClose }: { open: boolean; onClose: () => void
             <input
               inputMode="url"
               autoComplete="off"
-              placeholder="https://teams.microsoft.com/l/meetup-join/…"
+              placeholder="Paste a Teams, Zoom or Meet link"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               aria-label="Meeting link"
             />
-            {url && <small className={platform ? "ok-note" : "warn-note"}>{platform ? `${platform} link` : "Paste a Teams, Zoom, Google Meet or Webex link"}</small>}
+            {url && <small className={platform && platform !== "Webex" ? "ok-note" : "warn-note"}>{platform && platform !== "Webex" ? `${platform} link` : "Paste a Teams, Zoom or Google Meet link"}</small>}
           </label>
           <label className="field">
             <span>Title (optional)</span>
@@ -84,10 +84,10 @@ export function BotSheet({ open, onClose }: { open: boolean; onClose: () => void
             <span className="box" aria-hidden="true" />
             <span>People in this call will see the notetaker and know it's recording.</span>
           </label>
-          <button className="btn btn-ink btn-block btn-xl" disabled={busy || !platform || !consent || (when === "later" && !at) || ready === null}>
+          <button className="btn btn-ink btn-block btn-xl" disabled={busy || !platform || platform === "Webex" || !consent || (when === "later" && !at) || ready === null}>
             {busy ? <Loader2 className="spin" /> : <Bot />} {when === "later" ? "Schedule notetaker" : "Send notetaker now"}
           </button>
-          <p className="fine">Costs about $0.50 per hour the bot is in the call or lobby (billed by Recall.ai). In Teams, someone may need to admit it from the lobby.</p>
+          <p className="fine">Costs about $0.30 per hour the bot is in the call (billed by Vexa; new accounts get $5 free). In Teams, someone may need to admit it from the lobby.</p>
         </form>
       )}
     </Sheet>
