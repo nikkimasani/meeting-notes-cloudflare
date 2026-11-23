@@ -3,7 +3,7 @@ import { Bot, Loader2 } from "lucide-react";
 import { botConfigured, platformOf, sendBot } from "../lib/bot";
 import { Sheet, go, toast } from "./kit";
 
-export function BotSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function BotSheet({ open, onClose, mode = "now" }: { open: boolean; onClose: () => void; mode?: "now" | "later" }) {
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
   const [when, setWhen] = useState<"now" | "later">("now");
@@ -12,8 +12,11 @@ export function BotSheet({ open, onClose }: { open: boolean; onClose: () => void
   const [ready, setReady] = useState<boolean | null>(null);
   const [consent, setConsent] = useState(false);
   useEffect(() => {
-    if (open) void botConfigured().then(setReady);
-  }, [open]);
+    if (open) {
+      setWhen(mode);
+      void botConfigured().then(setReady);
+    }
+  }, [open, mode]);
   const platform = platformOf(url);
   const submit = async () => {
     setBusy(true);
@@ -33,7 +36,7 @@ export function BotSheet({ open, onClose }: { open: boolean; onClose: () => void
   return (
     <Sheet open={open} onClose={() => !busy && onClose()} title="Send a notetaker">
       <p className="sheet-note">
-        A bot named <b>Said &amp; Done Notetaker</b> joins only this call, records it, and the transcript and notes land here. It never joins anything on its own.
+        A bot named <b>Recapp Notetaker</b> joins only this call, records it, and the transcript and notes land here. It never joins anything on its own.
       </p>
       {ready === false ? (
         <div className="banner banner-warn">

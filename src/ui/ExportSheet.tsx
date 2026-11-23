@@ -133,7 +133,7 @@ export function ExportSheet({ open, onClose, meetings }: { open: boolean; onClos
             </button>
           </>
         ) : (
-          <Item id="all" icon={<FileArchive />} title={`All ${meetings.length} meetings (ZIP)`} sub={`A folder per meeting with every format${withAudio ? " and audio (can be large)" : ""}`} make={async () => ({ blob: await libraryZip(meetings, withAudio), name: `Said and Done export ${new Date().toISOString().slice(0, 10)}.zip` })} />
+          <Item id="all" icon={<FileArchive />} title={`All ${meetings.length} meetings (ZIP)`} sub={`A folder per meeting with every format${withAudio ? " and audio (can be large)" : ""}`} make={async () => ({ blob: await libraryZip(meetings, withAudio), name: `Recapp export ${new Date().toISOString().slice(0, 10)}.zip` })} />
         )}
       </div>
       </>)}

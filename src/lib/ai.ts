@@ -59,6 +59,15 @@ export async function generateNotes(meetingId: string) {
       keyPoints: data.key_points || [],
       openQuestions: data.open_questions || [],
       topics: data.topics || [],
+      sentiment:
+        data.sentiment && typeof data.sentiment.positive === "number"
+          ? {
+              positive: Math.round(data.sentiment.positive),
+              neutral: Math.round(data.sentiment.neutral),
+              negative: Math.round(data.sentiment.negative),
+              tone: String(data.sentiment.tone || ""),
+            }
+          : undefined,
       generatedAt: new Date().toISOString(),
     };
     const latest = store.get(meetingId)!;
@@ -173,3 +182,27 @@ const STOP = new Set(
     " ",
   ),
 );
+
+const followupInFlight = new Set<string>();
+export const isDraftingFollowup = (id: string) => followupInFlight.has(id);
+
+/** Drafts the follow-up email the organizer would send after the meeting. */
+export async function draftFollowup(meetingId: string) {
+  const m = store.get(meetingId);
+  if (!m || followupInFlight.has(meetingId)) return;
+  followupInFlight.add(meetingId);
+  store.update(meetingId, {});
+  try {
+    const res = await fetch("/api/followup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context: meetingContext(m) }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Could not draft the email (${res.status}).`);
+    store.update(meetingId, { followup: { subject: String(data.subject || m.title), body: String(data.body || ""), at: new Date().toISOString() } });
+  } finally {
+    followupInFlight.delete(meetingId);
+    store.update(meetingId, {});
+  }
+}

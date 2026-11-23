@@ -20,6 +20,7 @@ import { MeetingScreen } from "./ui/Meeting";
 import { AskScreen } from "./ui/Ask";
 import { SettingsScreen } from "./ui/Settings";
 import { Rail } from "./ui/Rail";
+import { TasksScreen } from "./ui/Tasks";
 
 function applyTheme() {
   const t = localStorage.getItem("sd-theme") || "system";
@@ -106,7 +107,7 @@ function App() {
   if (!loaded || !booted)
     return (
       <div className="boot">
-        <img src="/saiddone-mark.png" alt="" />
+        <img src="/recapp-mark.png" alt="" />
       </div>
     );
 
@@ -120,6 +121,7 @@ function App() {
           {route.name === "meeting" && <MeetingScreen id={route.id} tab={route.tab} />}
           {route.name === "ask" && <AskScreen />}
           {route.name === "settings" && <SettingsScreen />}
+          {route.name === "tasks" && <TasksScreen />}
         </Boundary>
       </main>
       <Toasts />

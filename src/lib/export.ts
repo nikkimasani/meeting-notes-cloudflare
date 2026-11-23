@@ -67,7 +67,7 @@ export const vtt = (m: Meeting) =>
   m.segments
     .map((s) => `${ts(s.start, ".")} --> ${ts(Math.max(s.end, s.start + 1), ".")}\n<v ${speakerName(m, s.speaker)}>${s.text}\n`)
     .join("\n");
-export const jsonExport = (m: Meeting) => JSON.stringify({ ...m, exportedAt: new Date().toISOString(), app: "Said and Done" }, null, 2);
+export const jsonExport = (m: Meeting) => JSON.stringify({ ...m, exportedAt: new Date().toISOString(), app: "Recapp" }, null, 2);
 
 // ---------- Word ----------
 export async function docxBlob(m: Meeting) {
@@ -146,7 +146,7 @@ export async function docxBlob(m: Meeting) {
     );
   }
   const doc = new Document({
-    creator: "Said and Done",
+    creator: "Recapp",
     title: m.title,
     styles: { default: { document: { run: { font: "Calibri", size: 22 } } } },
     sections: [{ children }],
@@ -243,7 +243,7 @@ export async function pdfBlob(m: Meeting) {
     doc.setPage(i);
     doc.setFontSize(8.5);
     doc.setTextColor(150);
-    doc.text(`Said and Done · ${m.title}`, M, H - 28);
+    doc.text(`Recapp · ${m.title}`, M, H - 28);
     doc.text(`${i} / ${pages}`, W - M, H - 28, { align: "right" });
   }
   return doc.output("blob");
@@ -325,7 +325,7 @@ export async function libraryZip(meetings: Meeting[], includeAudio: boolean, onP
     onProgress?.((i + 1) / meetings.length);
   }
   all["README.txt"] = new TextEncoder().encode(
-    `Said and Done export — ${new Date().toLocaleString()}\n${meetings.length} meetings. Each folder has the summary, transcript, captions, highlights, notes, AI chat, Word and PDF documents${includeAudio ? ", and audio" : ""}.\n`,
+    `Recapp export — ${new Date().toLocaleString()}\n${meetings.length} meetings. Each folder has the summary, transcript, captions, highlights, notes, AI chat, Word and PDF documents${includeAudio ? ", and audio" : ""}.\n`,
   );
   return zip(all);
 }

@@ -29,8 +29,11 @@ export type Notes = {
   keyPoints: string[];
   openQuestions: string[];
   topics: string[];
+  sentiment?: { positive: number; neutral: number; negative: number; tone: string };
   generatedAt: string;
 };
+
+export type FollowUp = { subject: string; body: string; at: string };
 
 export type MeetingStatus =
   | "recording" // capture in progress
@@ -75,6 +78,7 @@ export type Meeting = {
   bot?: BotInfo;
   language: string;
   marks?: number[]; // seconds tapped as "highlight this" while recording
+  followup?: FollowUp;
 };
 
 export type PieceState = "pending" | "done" | "failed";

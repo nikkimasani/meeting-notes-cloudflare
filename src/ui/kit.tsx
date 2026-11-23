@@ -11,8 +11,9 @@ export type Route =
   | { name: "meeting"; id: string; tab: Tab }
   | { name: "record" }
   | { name: "ask" }
+  | { name: "tasks" }
   | { name: "settings" };
-export type Tab = "summary" | "transcript" | "highlights" | "chat" | "notes";
+export type Tab = "summary" | "transcript" | "insights" | "highlights" | "chat" | "notes";
 
 function parse(): Route {
   const h = location.hash.replace(/^#\/?/, "");
@@ -24,6 +25,7 @@ function parse(): Route {
   }
   if (parts[0] === "record") return { name: "record" };
   if (parts[0] === "ask") return { name: "ask" };
+  if (parts[0] === "tasks") return { name: "tasks" };
   if (parts[0] === "settings") return { name: "settings" };
   return { name: "home" };
 }
@@ -144,6 +146,37 @@ export function Avatar({ name, id, size = 32 }: { name: string; id: string; size
   return (
     <span className="avatar" style={{ width: size, height: size, background: speakerColor(id), fontSize: size * 0.38 }}>
       {initials}
+    </span>
+  );
+}
+
+export function AvatarStack({ m, max = 4, size = 26 }: { m: Meeting; max?: number; size?: number }) {
+  const ids = [...new Set(m.segments.map((s) => s.speaker))];
+  if (!ids.length) return null;
+  const name = (id: string) => m.speakers[id] || (id.startsWith("S") ? `Speaker ${id.slice(1)}` : id);
+  return (
+    <span className="stack" aria-label={`${ids.length} speaker${ids.length === 1 ? "" : "s"}`}>
+      {ids.slice(0, max).map((id) => (
+        <Avatar key={id} id={id} name={name(id)} size={size} />
+      ))}
+      {ids.length > max && (
+        <span className="avatar more" style={{ width: size, height: size, fontSize: size * 0.36 }}>
+          +{ids.length - max}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Where a meeting came from: phone recording, a notetaker in a call, or an imported file. */
+export function SourceBadge({ m }: { m: Meeting }) {
+  const p = m.bot?.platform || "";
+  const kind = m.source === "bot" ? (p === "Google Meet" ? "meet" : p.toLowerCase() || "call") : m.source === "import" ? "import" : "mic";
+  const label = m.source === "bot" ? p || "Call" : m.source === "import" ? "Imported" : "In person";
+  return (
+    <span className={`src src-${kind}`}>
+      <i />
+      {label}
     </span>
   );
 }

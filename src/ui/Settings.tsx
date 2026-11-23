@@ -130,7 +130,7 @@ export function SettingsScreen() {
         </div>
       </section>
 
-      <p className="fine center">Said &amp; Done · v3 · Created by Nikki</p>
+      <p className="fine center">Recapp · v4 · Created by Nikki</p>
       <ExportSheet open={exportOpen} onClose={() => setExportOpen(false)} meetings={meetings} />
     </div>
   );

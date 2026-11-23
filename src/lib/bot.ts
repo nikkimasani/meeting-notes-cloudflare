@@ -104,7 +104,7 @@ export function botLabel(b: BotInfo): { text: string; tone: "busy" | "warn" | "w
     case "joining_call":
       return { text: `Joining ${who}…`, tone: "busy", canLeave: false, canCancel: true };
     case "in_waiting_room":
-      return { text: `Waiting in the lobby — admit “Said & Done Notetaker” in ${who}`, tone: "warn", canLeave: false, canCancel: true };
+      return { text: `Waiting in the lobby — admit “Recapp Notetaker” in ${who}`, tone: "warn", canLeave: false, canCancel: true };
     case "in_call_not_recording":
     case "recording_permission_allowed":
       return { text: `In the call, starting to record…`, tone: "busy", canLeave: true, canCancel: false };

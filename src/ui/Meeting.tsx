@@ -20,9 +20,14 @@ import {
   AudioLines,
   Check,
   X,
+  Mail,
+  RefreshCw,
+  Smile,
+  ChevronRight,
 } from "lucide-react";
+import { SMART_FILTERS, filterMatches, lanes, stats as meetingStats, talkTime } from "../lib/insights";
 import { store, useMeeting, uid } from "../lib/store";
-import { askMeeting, generateNotes, isGeneratingNotes, speakerName } from "../lib/ai";
+import { askMeeting, draftFollowup, generateNotes, isDraftingFollowup, isGeneratingNotes, speakerName } from "../lib/ai";
 import { playbackBlob } from "../lib/export";
 import { processStoredAudio } from "../lib/importer";
 import { transcriber } from "../lib/transcriber";
@@ -31,6 +36,9 @@ import { botLabel, cancelBot, makeBotLeave } from "../lib/bot";
 import type { Meeting, Segment } from "../lib/types";
 import {
   Avatar,
+  AvatarStack,
+  SourceBadge,
+  speakerColor,
   Empty,
   Sheet,
   Waveform,
@@ -186,23 +194,30 @@ export function MeetingScreen({ id, tab }: { id: string; tab: Tab }) {
           }}
         />
         <div className="meeting-meta">
-          <span>{new Date(m.createdAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>
-          <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+          <SourceBadge m={m} />
+          <span>
+            {new Date(m.createdAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} ·{" "}
+            {new Date(m.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+          </span>
           {m.duration > 0 && <span>{minutes(m.duration)}</span>}
-          {Object.keys(m.speakers).length > 0 && (
-            <button className="meta-link" onClick={() => setSpeakersOpen(true)}>
-              <Users /> {Object.keys(m.speakers).length} speaker{Object.keys(m.speakers).length === 1 ? "" : "s"}
-            </button>
-          )}
         </div>
+        {Object.keys(m.speakers).length > 0 && (
+          <button className="people" onClick={() => setSpeakersOpen(true)}>
+            <AvatarStack m={m} size={28} max={5} />
+            <span>
+              {Object.keys(m.speakers).length} speaker{Object.keys(m.speakers).length === 1 ? "" : "s"} · <u>rename</u>
+            </span>
+          </button>
+        )}
         <StatusBanner m={m} status={status} stats={stats} />
       </div>
 
       <nav className="tabs" role="tablist">
         {(
           [
-            ["summary", "Summary"],
+            ["summary", "Overview"],
             ["transcript", "Transcript"],
+            ["insights", "Insights"],
             ["highlights", `Highlights${hlCount ? " " + hlCount : ""}`],
             ["chat", "Chat"],
             ["notes", "Notes"],
@@ -217,6 +232,7 @@ export function MeetingScreen({ id, tab }: { id: string; tab: Tab }) {
       <div className="tab-body">
         {tab === "summary" && <SummaryTab m={m} player={player} />}
         {tab === "transcript" && <TranscriptTab m={m} player={player} />}
+        {tab === "insights" && <InsightsTab m={m} player={player} />}
         {tab === "highlights" && <HighlightsTab m={m} player={player} />}
         {tab === "chat" && <ChatTab m={m} />}
         {tab === "notes" && <NotesTab m={m} />}
@@ -370,13 +386,17 @@ function SummaryTab({ m, player }: { m: Meeting; player: Player }) {
     );
   return (
     <div className="pad summary">
+      <CallFlow m={m} player={player} />
       {busy && (
         <div className="writing small">
           <span className="spinner" /> Updating…
         </div>
       )}
       <section className="block">
-        <h3 className="kicker">Overview</h3>
+        <div className="block-head">
+          <h3 className="kicker">Brief</h3>
+          {n.sentiment && <span className="tone"><Smile /> {n.sentiment.tone}</span>}
+        </div>
         <textarea
           className="prose"
           value={n.summary}
@@ -393,7 +413,7 @@ function SummaryTab({ m, player }: { m: Meeting; player: Player }) {
 
       <section className="block">
         <div className="block-head">
-          <h3 className="kicker">Action items</h3>
+          <h3 className="kicker">Next steps</h3>
           <button className="link" onClick={addAction}>
             + Add
           </button>
@@ -423,6 +443,8 @@ function SummaryTab({ m, player }: { m: Meeting; player: Player }) {
           <p className="quiet-note">No action items were mentioned.</p>
         )}
       </section>
+
+      <FollowUpCard m={m} />
 
       {n.outline.length > 0 && (
         <section className="block">
@@ -504,6 +526,8 @@ function TranscriptTab({ m, player }: { m: Meeting; player: Player }) {
   const [q, setQ] = useState("");
   const [follow, setFollow] = useState(true);
   const [active, setActive] = useState<Segment | null>(null);
+  const [who, setWho] = useState<string | null>(null);
+  const speakers = useMemo(() => [...new Set(m.segments.map((s) => s.speaker))], [m.segments]);
   const activeId = useMemo(() => {
     if (!player.playing && player.time === 0) return null;
     let found: string | null = null;
@@ -514,7 +538,7 @@ function TranscriptTab({ m, player }: { m: Meeting; player: Player }) {
     if (!follow || !activeId || !player.playing) return;
     document.getElementById("seg-" + activeId)?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [activeId, follow, player.playing]);
-  const shown = q.trim() ? m.segments.filter((s) => s.text.toLowerCase().includes(q.toLowerCase())) : m.segments;
+  const shown = m.segments.filter((s) => (!who || s.speaker === who) && (!q.trim() || s.text.toLowerCase().includes(q.toLowerCase())));
   if (!m.segments.length)
     return (
       <div className="pad">
@@ -534,11 +558,24 @@ function TranscriptTab({ m, player }: { m: Meeting; player: Player }) {
           </label>
         )}
       </div>
-      {q && <p className="quiet-note">{shown.length} match{shown.length === 1 ? "" : "es"}</p>}
+      {speakers.length > 1 && (
+        <div className="who-filter" role="group" aria-label="Show speaker">
+          <button className={!who ? "on" : ""} onClick={() => setWho(null)}>
+            Everyone
+          </button>
+          {speakers.map((id) => (
+            <button key={id} className={who === id ? "on" : ""} onClick={() => setWho(who === id ? null : id)}>
+              <i style={{ background: speakerColor(id) }} />
+              {speakerName(m, id)}
+            </button>
+          ))}
+        </div>
+      )}
+      {(q || who) && <p className="quiet-note">{shown.length} line{shown.length === 1 ? "" : "s"}</p>}
       <div className="lines">
         {shown.map((s, i) => {
           const prev = shown[i - 1];
-          const same = !q && prev && prev.speaker === s.speaker && s.start - prev.end < 30;
+          const same = !q && !who && prev && prev.speaker === s.speaker && s.start - prev.end < 30;
           return (
             <div key={s.id} id={"seg-" + s.id} className={`line ${same ? "cont" : ""} ${s.id === activeId ? "now" : ""} ${s.highlight ? "is-hl" : ""}`}>
               {!same && (
@@ -674,6 +711,275 @@ function SpeakersSheet({ m, open, onClose }: { m: Meeting; open: boolean; onClos
       </button>
     </Sheet>
   );
+}
+
+// ---------- Call flow: waveform + who spoke when ----------
+function CallFlow({ m, player }: { m: Meeting; player: Player }) {
+  const talk = useMemo(() => talkTime(m), [m.segments, m.speakers]);
+  const ln = useMemo(() => lanes(m), [m.segments, m.duration]);
+  if (!m.segments.length) return null;
+  const dur = Math.max(m.duration, m.segments[m.segments.length - 1]?.end || 0, 1);
+  const progress = player.available ? player.time / dur : -1;
+  const seekAt = (e: React.MouseEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    player.seek(((e.clientX - r.left) / r.width) * dur);
+  };
+  return (
+    <section className="flow card" aria-label="Call flow">
+      <div className="flow-head">
+        <h3 className="kicker">Call flow</h3>
+        <span className="mono quiet">{clock(dur)}</span>
+      </div>
+      {m.peaks.length > 0 && (
+        <Waveform peaks={m.peaks} bars={120} height={30} progress={progress} onSeek={player.available ? (f) => player.seek(f * dur, player.playing) : undefined} className="flow-wave" />
+      )}
+      <div className="lanes">
+        {talk.slice(0, 6).map((t) => (
+          <div key={t.id} className="lane">
+            <span className="lane-who">
+              <Avatar id={t.id} name={t.name} size={20} />
+              <span className="lane-name">{t.name}</span>
+            </span>
+            <span className="lane-track" onClick={player.available ? seekAt : undefined}>
+              {(ln.get(t.id) || []).map((r, i) => (
+                <i key={i} style={{ left: `${r.from * 100}%`, width: `${Math.max(0.4, (r.to - r.from) * 100)}%`, background: speakerColor(t.id) }} />
+              ))}
+              {progress >= 0 && <b className="lane-head" style={{ left: `${Math.min(100, progress * 100)}%` }} />}
+            </span>
+            <span className="lane-pct mono">{t.pct}%</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ---------- Follow-up email ----------
+function FollowUpCard({ m }: { m: Meeting }) {
+  const busy = isDraftingFollowup(m.id);
+  const f = m.followup;
+  const run = () => void draftFollowup(m.id).catch((e) => toast(e.message, "error"));
+  return (
+    <section className="block">
+      <div className="block-head">
+        <h3 className="kicker">Follow-up email</h3>
+        {f && (
+          <button className="link" onClick={run} disabled={busy}>
+            <RefreshCw className={busy ? "spin" : ""} /> Rewrite
+          </button>
+        )}
+      </div>
+      {f ? (
+        <div className="email card">
+          <input
+            className="email-subject"
+            value={f.subject}
+            aria-label="Subject"
+            onChange={(e) => store.update(m.id, { followup: { ...f, subject: e.target.value } }, { debounce: true })}
+          />
+          <textarea
+            className="email-body"
+            value={f.body}
+            aria-label="Email body"
+            onChange={(e) => store.update(m.id, { followup: { ...f, body: e.target.value } }, { debounce: true })}
+            ref={(el) => {
+              if (el) {
+                el.style.height = "auto";
+                el.style.height = el.scrollHeight + "px";
+              }
+            }}
+          />
+          <div className="email-actions">
+            <a className="btn btn-ink btn-sm" href={`mailto:?subject=${encodeURIComponent(f.subject)}&body=${encodeURIComponent(f.body)}`}>
+              <Mail /> Open in Mail
+            </a>
+            <button className="btn btn-quiet btn-sm" onClick={() => void navigator.clipboard.writeText(`Subject: ${f.subject}\n\n${f.body}`).then(() => toast("Email copied"))}>
+              <Copy /> Copy
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="draft-cta" onClick={run} disabled={busy}>
+          <span className="qa-icon qa-ink">{busy ? <span className="spinner light" /> : <Mail />}</span>
+          <span>
+            <b>{busy ? "Writing your follow-up…" : "Draft the follow-up email"}</b>
+            <small>Recap, decisions and next steps with owners — ready to send.</small>
+          </span>
+          <ChevronRight />
+        </button>
+      )}
+    </section>
+  );
+}
+
+// ---------- Insights ----------
+function InsightsTab({ m, player }: { m: Meeting; player: Player }) {
+  const [pick, setPick] = useState<string | null>(null);
+  const talk = useMemo(() => talkTime(m), [m.segments, m.speakers]);
+  const st = useMemo(() => meetingStats(m), [m.segments]);
+  const counts = useMemo(() => SMART_FILTERS.map((f) => ({ f, list: filterMatches(m, f) })), [m.segments]);
+  if (!m.segments.length)
+    return (
+      <div className="pad">
+        <Empty icon={<AudioLines />} title="Insights appear after transcription" body="Talk time, who asked what, decisions, dates, numbers and risks — pulled from the transcript." />
+      </div>
+    );
+  const chosen = counts.find((c) => c.f.key === pick);
+  const actionSegs = (m.notes?.actions || []).filter((a) => a.start !== null);
+  const sent = m.notes?.sentiment;
+  return (
+    <div className="pad insights">
+      <CallFlow m={m} player={player} />
+
+      <section className="block">
+        <h3 className="kicker">Smart search</h3>
+        <div className="smart">
+          {actionSegs.length > 0 && (
+            <button className={pick === "actions" ? "on" : ""} onClick={() => setPick(pick === "actions" ? null : "actions")}>
+              Action items <b>{actionSegs.length}</b>
+            </button>
+          )}
+          {counts.map(({ f, list }) => (
+            <button key={f.key} className={pick === f.key ? "on" : ""} disabled={!list.length} onClick={() => setPick(pick === f.key ? null : f.key)}>
+              {f.label} <b>{list.length}</b>
+            </button>
+          ))}
+          {(m.notes?.topics || []).slice(0, 6).map((t) => (
+            <button key={"t" + t} className={`topic ${pick === "t:" + t ? "on" : ""}`} onClick={() => setPick(pick === "t:" + t ? null : "t:" + t)}>
+              #{t}
+            </button>
+          ))}
+        </div>
+        {pick && (
+          <ul className="moments">
+            {(pick === "actions"
+              ? actionSegs.map((a) => ({ id: a.id, speaker: m.segments.find((s) => s.start >= (a.start || 0) - 1)?.speaker || "S1", start: a.start || 0, text: a.task, re: null as RegExp | null }))
+              : pick.startsWith("t:")
+                ? m.segments
+                    .filter((s) => pick.slice(2).toLowerCase().split(/\s+/).some((w) => w.length > 3 && s.text.toLowerCase().includes(w)))
+                    .map((s) => ({ ...s, re: null as RegExp | null }))
+                : (chosen?.list || []).map((s) => ({ ...s, re: chosen!.f.test(s) }))
+            )
+              .slice(0, 60)
+              .map((s) => (
+                <li key={s.id}>
+                  <button onClick={() => player.seek(s.start)} disabled={!player.available}>
+                    <span className="m-who">
+                      <Avatar id={s.speaker} name={speakerName(m, s.speaker)} size={22} />
+                      <b>{speakerName(m, s.speaker)}</b>
+                      <span className="mono quiet">{clock(s.start)}</span>
+                      {player.available && <Play className="m-play" />}
+                    </span>
+                    <p>{s.re ? markRe(s.text, s.re) : s.text}</p>
+                  </button>
+                </li>
+              ))}
+            {pick.startsWith("t:") && !m.segments.some((s) => pick.slice(2).toLowerCase().split(/\s+/).some((w) => w.length > 3 && s.text.toLowerCase().includes(w))) && (
+              <p className="quiet-note">This topic runs through the meeting without one quotable line.</p>
+            )}
+          </ul>
+        )}
+      </section>
+
+      <section className="block">
+        <h3 className="kicker">Talk time</h3>
+        <ul className="talk">
+          {talk.map((t) => (
+            <li key={t.id}>
+              <Avatar id={t.id} name={t.name} size={32} />
+              <div className="talk-main">
+                <div className="talk-top">
+                  <b>{t.name}</b>
+                  <span className="mono">{t.pct}%</span>
+                </div>
+                <span className="talk-bar">
+                  <i style={{ width: `${t.pct}%`, background: speakerColor(t.id) }} />
+                </span>
+                <small>
+                  {minutes(t.sec) || "<1 min"} · {t.words.toLocaleString()} words · {t.questions} question{t.questions === 1 ? "" : "s"}
+                </small>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {sent && (
+        <section className="block">
+          <div className="block-head">
+            <h3 className="kicker">Sentiment</h3>
+            <span className="tone">
+              <Smile /> {sent.tone}
+            </span>
+          </div>
+          <div className="sentiment">
+            <span className="sent-bar">
+              <i className="pos" style={{ width: sent.positive + "%" }} />
+              <i className="neu" style={{ width: sent.neutral + "%" }} />
+              <i className="neg" style={{ width: sent.negative + "%" }} />
+            </span>
+            <div className="sent-legend">
+              <span>
+                <i className="pos" /> Positive <b className="mono">{sent.positive}%</b>
+              </span>
+              <span>
+                <i className="neu" /> Neutral <b className="mono">{sent.neutral}%</b>
+              </span>
+              <span>
+                <i className="neg" /> Negative <b className="mono">{sent.negative}%</b>
+              </span>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <section className="block">
+        <h3 className="kicker">By the numbers</h3>
+        <div className="numbers">
+          <div>
+            <b>{st.words.toLocaleString()}</b>
+            <span>words spoken</span>
+          </div>
+          <div>
+            <b>{st.wpm || "—"}</b>
+            <span>words / minute</span>
+          </div>
+          <div>
+            <b>{st.questions}</b>
+            <span>questions asked</span>
+          </div>
+          <div>
+            <b>{st.switches}</b>
+            <span>speaker changes</span>
+          </div>
+          {st.longest.sec > 0 && (
+            <button className="wide" onClick={() => player.seek(st.longest.start)} disabled={!player.available}>
+              <b>{clock(st.longest.sec)}</b>
+              <span>
+                longest monologue · {speakerName(m, st.longest.speaker)} at <span className="mono">{clock(st.longest.start)}</span>
+              </span>
+            </button>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function markRe(text: string, re: RegExp) {
+  const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  let k = 0;
+  for (const hit of text.matchAll(g)) {
+    if (!hit[0]) continue;
+    const i = hit.index || 0;
+    out.push(text.slice(last, i), <mark key={k++}>{hit[0]}</mark>);
+    last = i + hit[0].length;
+    if (k > 8) break;
+  }
+  out.push(text.slice(last));
+  return out;
 }
 
 // ---------- Highlights ----------
